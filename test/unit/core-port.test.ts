@@ -182,7 +182,9 @@ describe("commands", () => {
   });
 
   it("guild registration strips global-only fields", () => {
-    expect(commandsFor("guild")).toEqual([{ name: "Track Seen", type: 3 }]);
-    expect(commandsFor("global")).toEqual([trackSeenCommand]);
+    // M9 adds /autotrack after Track Seen (shape pinned in commands.test.ts); Track Seen is unchanged.
+    expect(commandsFor("guild")[0]).toEqual({ name: "Track Seen", type: 3 });
+    expect(commandsFor("global")[0]).toEqual(trackSeenCommand);
+    expect(commandsFor("guild")).toHaveLength(2);
   });
 });

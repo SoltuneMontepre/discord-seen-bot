@@ -89,6 +89,22 @@ export const MSG = {
   unsupportedChannel: "Track Seen isn't supported in this kind of channel.",
   cannotTrackBot: "Seen status cards can't be tracked.",
   unsupportedMessage: "This kind of message can't be tracked.",
+  autotrackDisabled: "Role-based auto-track is disabled on this bot (ROLE_TARGETS_ENABLED=false).",
+  policyPaused:
+    "Member state is temporarily unavailable, so changes that add targets are paused. Try again shortly.",
+  policyOverLimit: (resolved: number, limit: number) =>
+    `That would target ${resolved} members, above the limit of ${limit}. Nothing was changed.`,
+  policyNeedsRole: "An enabled policy needs at least one role.",
+  policyEveryone: "@everyone can't be used as a policy role.",
+  policyInvalidName: "Policy names must be 1–100 characters.",
+  policyInvalidState: "That action isn't available for this policy's current state.",
+  policyChannelType: "Auto-track policies can only be set on text or announcement channels.",
+  policyDeleted: "Policy deleted.",
+  policyDeleteConfirm: (name: string) =>
+    `Delete the auto-track policy **${name}**? This can't be undone.`,
+  policyNone: (channelId: string) => `No auto-track policies in <#${channelId}>.`,
+  policyMissingPerms: (channelId: string, perms: string[]) =>
+    `⚠ I'm missing permissions in <#${channelId}>: ${perms.join(", ")}. Auto-track cards can't be posted there until they're granted.`,
   truncatedTargets: (n: number) =>
     `Only the first 25 people are tracked (${n} more were left out).`,
 } as const;

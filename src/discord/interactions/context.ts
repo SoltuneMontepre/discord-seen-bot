@@ -1,8 +1,10 @@
 import type { APIInteraction } from "@discordjs/core";
+import type { PolicyService } from "../../app/policy-service.ts";
 import type { DiscordPort, Logger } from "../../app/ports.ts";
 import type { Reconciler } from "../../app/reconciler.ts";
 import type { RenderScheduler } from "../../app/render-scheduler.ts";
 import type { TrackingService } from "../../app/tracking-service.ts";
+import type { PolicyRepository } from "../../db/policy-repository.ts";
 import type { Repository } from "../../db/repository.ts";
 import type { Policy } from "../../domain/policy.ts";
 import type { Responder } from "./responder.ts";
@@ -18,6 +20,12 @@ export interface InteractionDeps {
   policy: Policy;
   logger: Logger;
   debugPayloads: boolean;
+  /** M9 /autotrack. policyService exists only when role targets are on. */
+  autotrack?: {
+    features: { mentionAutoTrack: boolean; roleTargets: boolean };
+    policies: PolicyRepository;
+    policyService?: PolicyService;
+  };
 }
 
 /** Identity always comes from the Discord interaction payload, never from custom_id. */

@@ -7,6 +7,7 @@ import {
 import type { InteractionDeps } from "../../src/discord/interactions/context.ts";
 import type {
   InteractionRef,
+  ModalData,
   Responder,
   ResponseData,
 } from "../../src/discord/interactions/responder.ts";
@@ -51,6 +52,9 @@ export class FakeResponder implements Responder {
   }
   async editReply(ref: InteractionRef, data: ResponseData) {
     this.rec("editReply", ref, data);
+  }
+  async showModal(ref: InteractionRef, data: ModalData) {
+    this.rec("showModal", ref, data as unknown as ResponseData);
   }
   last(): ResponderCall | undefined {
     return this.calls.at(-1);
@@ -188,4 +192,78 @@ export function componentInteraction(
         }
       : { custom_id: customId, component_type: 2 },
   } as unknown as APIMessageComponentInteraction;
+}
+
+// ------------------------------------------------------------------ M9 /autotrack fixtures
+
+export interface ChatOption {
+  name: string;
+  type: number;
+  value: string | number;
+}
+
+/** /autotrack <sub> with options; `resolvedChannels` mirrors data.resolved.channels. */
+export function autotrackInteraction(
+  sub: "create" | "list",
+  options: ChatOption[],
+  o: Base & {
+    resolvedChannels?: Record<string, { type: number; app_permissions?: string }>;
+  } = {},
+) {
+  return {
+    ...base(o),
+    type: 2,
+    data: {
+      id: "cmd2",
+      name: "autotrack",
+      type: 1,
+      options: [{ type: 1, name: sub, options }],
+      ...(o.resolvedChannels
+        ? {
+            resolved: {
+              channels: Object.fromEntries(
+                Object.entries(o.resolvedChannels).map(([id, c]) => [
+                  id,
+                  { id, name: `c${id}`, permissions: "0", ...c },
+                ]),
+              ),
+            },
+          }
+        : {}),
+    },
+  } as never;
+}
+
+/** Role select (component_type 6) or string select (3) on an ephemeral panel. */
+export function selectInteraction(
+  customId: string,
+  values: string[],
+  o: Base & { componentType?: 3 | 6; messageId?: string } = {},
+): APIMessageComponentInteraction {
+  return {
+    ...base(o),
+    type: 3,
+    message: { id: o.messageId ?? "0", channel_id: o.channelId ?? CHANNEL, flags: 64 },
+    data: { custom_id: customId, component_type: o.componentType ?? 6, values, resolved: {} },
+  } as unknown as APIMessageComponentInteraction;
+}
+
+/** Modal submit from a panel component (a text input per field, in Label wrappers). */
+export function modalSubmitInteraction(
+  customId: string,
+  fields: Record<string, string>,
+  o: Base & { messageId?: string } = {},
+) {
+  return {
+    ...base(o),
+    type: 5,
+    message: { id: o.messageId ?? "0", channel_id: o.channelId ?? CHANNEL, flags: 64 },
+    data: {
+      custom_id: customId,
+      components: Object.entries(fields).map(([id, value]) => ({
+        type: 18,
+        component: { type: 4, custom_id: id, value },
+      })),
+    },
+  } as never;
 }

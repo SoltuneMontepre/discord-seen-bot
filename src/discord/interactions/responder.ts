@@ -1,7 +1,12 @@
-import type { API, APIInteractionResponseCallbackData } from "@discordjs/core";
+import type {
+  API,
+  APIInteractionResponseCallbackData,
+  APIModalInteractionResponseCallbackData,
+} from "@discordjs/core";
 import { MessageFlags } from "@discordjs/core";
 
 export type ResponseData = APIInteractionResponseCallbackData;
+export type ModalData = APIModalInteractionResponseCallbackData;
 
 export interface InteractionRef {
   id: string;
@@ -20,6 +25,8 @@ export interface Responder {
   update(i: InteractionRef, data: ResponseData): Promise<void>;
   /** PATCH the original response (or the component's message after a deferred update). */
   editReply(i: InteractionRef, data: ResponseData): Promise<void>;
+  /** MODAL (9). */
+  showModal(i: InteractionRef, data: ModalData): Promise<void>;
 }
 
 export class CoreResponder implements Responder {
@@ -59,5 +66,9 @@ export class CoreResponder implements Responder {
       allowed_mentions: { parse: [] },
       ...data,
     } as Parameters<API["interactions"]["editReply"]>[2]);
+  }
+
+  async showModal(i: InteractionRef, data: ModalData): Promise<void> {
+    await this.api.interactions.createModal(i.id, i.token, data);
   }
 }
