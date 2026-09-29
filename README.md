@@ -123,7 +123,8 @@ pnpm dev                    # node --watch --env-file=.env src/main.ts
 
 Dev-only overrides (ignored when `NODE_ENV=production`) shorten policy windows for manual testing:
 `SEEN_WEAK_WINDOW_MINUTES`, `SEEN_TRACKING_TTL_MINUTES`, `SEEN_RETENTION_MINUTES`.
-`SEEN_DEBUG_PAYLOADS=1` logs the **ids** of mentions in Track Seen payloads (never content).
+`SEEN_DEBUG_PAYLOADS=1` logs the **ids** of mentions in Track Seen payloads, and ids-only shapes of
+`MESSAGE_CREATE`/`MESSAGE_UPDATE`/`GUILD_MEMBER_*` dispatches for the M9 ⚠ checks (never content).
 
 ## Verification
 

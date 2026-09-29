@@ -31,6 +31,7 @@ import {
   messageToAutoTrackCandidate,
   messageToSignal,
 } from "./adapters/message.ts";
+import { memberPayloadShape, messagePayloadShape } from "./adapters/payload-shape.ts";
 import {
   reactionAddToSignal,
   reactionRemoveAllToSignal,
@@ -60,6 +61,29 @@ export interface GatewayDeps {
   };
   /** Unrecoverable gateway condition (e.g. 4014 disallowed intents). */
   onFatal?: (reason: string) => void;
+  /** SEEN_DEBUG_PAYLOADS: log ids-only shapes of M9-relevant dispatches (never content). */
+  debugPayloads?: boolean;
+}
+
+const MESSAGE_SHAPE_EVENTS = new Set<string>([
+  GatewayDispatchEvents.MessageCreate,
+  GatewayDispatchEvents.MessageUpdate,
+]);
+const MEMBER_SHAPE_EVENTS = new Set<string>([
+  GatewayDispatchEvents.GuildMemberAdd,
+  GatewayDispatchEvents.GuildMemberUpdate,
+  GatewayDispatchEvents.GuildMemberRemove,
+]);
+
+function logPayloadShape(logger: Logger, p: GatewayDispatchPayload): void {
+  if (MESSAGE_SHAPE_EVENTS.has(p.t)) {
+    const d = p.d as Parameters<typeof messagePayloadShape>[0];
+    if (d.author)
+      logger.debug({ event: p.t, shape: messagePayloadShape(d) }, "gateway payload shape");
+  } else if (MEMBER_SHAPE_EVENTS.has(p.t)) {
+    const d = p.d as Parameters<typeof memberPayloadShape>[0];
+    logger.debug({ event: p.t, shape: memberPayloadShape(d) }, "gateway payload shape");
+  }
 }
 
 /** Close code for a privileged intent the Developer Portal has not enabled (no reconnect). */
@@ -157,6 +181,7 @@ export function attachGateway(gateway: GatewayLike, deps: GatewayDeps): void {
       run("interaction", () => deps.router.handle(interaction));
       return;
     }
+    if (deps.debugPayloads) logPayloadShape(deps.logger, payload);
     const signal = dispatchToSignal(payload);
     if (signal) run(signal.t, () => deps.service.recordSignal(signal));
     if (!auto) return;

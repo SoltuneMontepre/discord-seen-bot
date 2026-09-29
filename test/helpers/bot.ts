@@ -43,6 +43,7 @@ export async function makeBot(
     dbPath?: string;
     discord?: FakeDiscord;
     policy?: Partial<Policy>;
+    debugPayloads?: boolean;
   } = {},
 ): Promise<BotHarness> {
   const tmp = o.dbPath ? undefined : tempDbPath("bot-m9");
@@ -70,6 +71,7 @@ export async function makeBot(
     clock: dateClock,
     ...(o.features ? { features: o.features } : {}),
     onFatal: (reason) => fatal.push(reason),
+    ...(o.debugPayloads ? { debugPayloads: true } : {}),
   });
   return {
     bot,

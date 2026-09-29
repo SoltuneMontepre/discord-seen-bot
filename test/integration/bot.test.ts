@@ -297,3 +297,55 @@ describe("M9 gateway wiring", () => {
     ).toBe(true);
   });
 });
+
+describe("SEEN_DEBUG_PAYLOADS gateway shapes", () => {
+  let dbg: import("../helpers/bot.ts").BotHarness;
+  afterEach(async () => dbg?.close());
+
+  it("logs ids-only payload shapes for M9-relevant dispatches only when enabled", async () => {
+    const { makeBot } = await import("../helpers/bot.ts");
+    dbg = await makeBot({
+      features: { mentionAutoTrack: true, roleTargets: false },
+      debugPayloads: true,
+    });
+    await dbg.bot.start();
+    dbg.gateway.dispatch(GatewayDispatchEvents.MessageCreate, {
+      id: nextId(T0),
+      channel_id: CHANNEL,
+      guild_id: "500",
+      type: 0,
+      channel_type: 0,
+      author: { id: AUTHOR },
+      content: "hidden",
+      mentions: [],
+    });
+    dbg.gateway.dispatch(GatewayDispatchEvents.GuildMemberUpdate, {
+      guild_id: "500",
+      user: { id: "1" },
+      roles: ["7"],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const shapes = dbg.logger.entries.filter((e) => e.msg === "gateway payload shape");
+    expect(shapes.map((e) => (e.obj as { event: string }).event)).toEqual([
+      "MESSAGE_CREATE",
+      "GUILD_MEMBER_UPDATE",
+    ]);
+    expect(JSON.stringify(shapes)).not.toContain("hidden");
+  });
+
+  it("logs nothing when disabled", async () => {
+    const { makeBot } = await import("../helpers/bot.ts");
+    dbg = await makeBot({ features: { mentionAutoTrack: true, roleTargets: false } });
+    await dbg.bot.start();
+    dbg.gateway.dispatch(GatewayDispatchEvents.MessageCreate, {
+      id: nextId(T0),
+      channel_id: CHANNEL,
+      guild_id: "500",
+      type: 0,
+      channel_type: 0,
+      author: { id: AUTHOR },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dbg.logger.entries.some((e) => e.msg === "gateway payload shape")).toBe(false);
+  });
+});

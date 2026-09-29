@@ -189,6 +189,7 @@ export function createBot(o: BotOptions): Bot {
           ? { autoTrack: { coordinator: m9.coordinator, features: m9.features } }
           : {}),
         ...(o.onFatal ? { onFatal: o.onFatal } : {}),
+        debugPayloads: o.debugPayloads ?? false,
       });
       ticker = setInterval(() => {
         health.tick().catch((err: unknown) => o.logger.error({ err }, "watermark tick failed"));
