@@ -103,6 +103,14 @@ describe("PolicyRepository", () => {
     expect((await policies.referencedRoleIds("500")).sort()).toEqual(["700", "701"]);
   });
 
+  it("allRoleIds: distinct roles of all the guild's policies, any state", async () => {
+    const off = await create(["700"]);
+    await policies.setState(off.id, "user_disabled", "100", T0);
+    await create(["701", "700"], { channelId: "601" });
+    await create(["709"], { guildId: "501" });
+    expect(await policies.allRoleIds("500")).toEqual(["700", "701"]);
+  });
+
   it("saveRolesAndState replaces roles in one txn, keeping added_at of kept roles", async () => {
     const a = await create(["700", "701"]);
     await policies.saveRolesAndState(a.id, ["701", "702"], "enabled", "101", T0 + MIN);

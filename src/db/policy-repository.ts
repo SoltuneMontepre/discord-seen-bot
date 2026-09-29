@@ -160,6 +160,20 @@ export class PolicyRepository {
     return rows.map((r) => r.source_ref);
   }
 
+  /** Distinct roles of all the guild's policies, whatever their state (offline role pruning). */
+  async allRoleIds(guildId: Snowflake): Promise<Snowflake[]> {
+    const rows = await this.db
+      .selectFrom("auto_track_policies as p")
+      .innerJoin("auto_track_policy_sources as s", "s.policy_id", "p.id")
+      .select("s.source_ref")
+      .distinct()
+      .where("p.guild_id", "=", guildId)
+      .where("s.source_type", "=", "role")
+      .orderBy("s.source_ref")
+      .execute();
+    return rows.map((r) => r.source_ref);
+  }
+
   /** Replaces the role set and sets the state in one transaction. Kept roles keep their added_*. */
   async saveRolesAndState(
     id: number,
