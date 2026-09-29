@@ -1,4 +1,5 @@
 import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
+import type { TargetSource } from "../domain/target-sources.ts";
 import type {
   Ack,
   Evidence,
@@ -7,6 +8,7 @@ import type {
   StopReason,
   Target,
   TrackedMessage,
+  TrackingOrigin,
   UnixMs,
 } from "../domain/types.ts";
 import type { Database, TrackedMessagesTable } from "./schema.ts";
@@ -24,7 +26,14 @@ export interface NewTracking {
   createdAt: UnixMs;
   weakWindowEndsAt: UnixMs;
   expiresAt: UnixMs;
+  /** Discord channel type of the source location; stored for auto trackings only (D4). */
+  channelType?: number | null;
 }
+
+export type AutoReconcileResult =
+  | { status: "inactive" | "unchanged" }
+  | { status: "changed"; added: Snowflake[]; removed: Snowflake[] }
+  | { status: "stopped"; removed: Snowflake[] };
 
 export interface TrackingView {
   tracked: TrackedMessage;
@@ -82,6 +91,36 @@ function isUniqueViolation(err: unknown): boolean {
 
 const changed = (n: bigint | undefined) => (n ?? 0n) > 0n;
 
+function toSourceRow(trackedMessageId: number, s: TargetSource) {
+  return {
+    tracked_message_id: trackedMessageId,
+    source_type: s.type,
+    source_ref: s.type === "user" ? s.userId : s.roleId,
+  };
+}
+
+function toSource(r: { source_type: string; source_ref: string }): TargetSource {
+  if (r.source_type === "user") return { type: "user", userId: r.source_ref };
+  if (r.source_type === "role") return { type: "role", roleId: r.source_ref };
+  throw new Error(`unknown tracking source type: ${r.source_type}`);
+}
+
+/** Removed users lose their target row, evidence and ack for this tracked message. */
+async function deleteUsersFromTracking(
+  trx: Transaction<Database>,
+  trackedMessageId: number,
+  userIds: readonly Snowflake[],
+): Promise<void> {
+  if (userIds.length === 0) return;
+  for (const table of ["tracking_targets", "evidence", "acknowledgements"] as const) {
+    await trx
+      .deleteFrom(table)
+      .where("tracked_message_id", "=", trackedMessageId)
+      .where("user_id", "in", userIds)
+      .execute();
+  }
+}
+
 export class Repository {
   private readonly db: Kysely<Database>;
 
@@ -95,6 +134,28 @@ export class Repository {
   async insertTracking(
     input: NewTracking,
     targetIds: readonly Snowflake[],
+  ): Promise<{ ok: true; tracked: TrackedMessage } | { ok: false; reason: "conflict" }> {
+    return this.insertWithTargets("manual", input, targetIds, []);
+  }
+
+  /**
+   * Auto tracking (phase A): tracked message (origin 'auto', channel_type), its frozen
+   * tracking_sources and its initial targets in one transaction. Any unique conflict (an active
+   * tracking of the message, or any earlier auto tracking of it) writes nothing.
+   */
+  async insertAutoTracking(
+    input: NewTracking,
+    targetIds: readonly Snowflake[],
+    sources: readonly TargetSource[],
+  ): Promise<{ ok: true; tracked: TrackedMessage } | { ok: false; reason: "conflict" }> {
+    return this.insertWithTargets("auto", input, targetIds, sources);
+  }
+
+  private async insertWithTargets(
+    origin: TrackingOrigin,
+    input: NewTracking,
+    targetIds: readonly Snowflake[],
+    sources: readonly TargetSource[],
   ): Promise<{ ok: true; tracked: TrackedMessage } | { ok: false; reason: "conflict" }> {
     try {
       return await this.db.transaction().execute(async (trx) => {
@@ -111,6 +172,8 @@ export class Repository {
             created_at: input.createdAt,
             weak_window_ends_at: input.weakWindowEndsAt,
             expires_at: input.expiresAt,
+            origin,
+            channel_type: origin === "auto" ? (input.channelType ?? null) : null,
           })
           .returningAll()
           .executeTakeFirstOrThrow();
@@ -125,6 +188,12 @@ export class Repository {
                 added_at: input.createdAt,
               })),
             )
+            .execute();
+        }
+        if (sources.length > 0) {
+          await trx
+            .insertInto("tracking_sources")
+            .values(sources.map((src) => toSourceRow(row.id, src)))
             .execute();
         }
         return { ok: true as const, tracked: toTracked(row) };
@@ -304,6 +373,149 @@ export class Repository {
     return Number(r.numDeletedRows);
   }
 
+  // ---------------------------------------------------------------- auto trackings (M9)
+
+  /** Stops an active auto tracking, keeping its rows. No-op (false) for manual or stopped rows. */
+  async stopAuto(id: number, reason: StopReason, at: UnixMs): Promise<boolean> {
+    const r = await this.db
+      .updateTable("tracked_messages")
+      .set({ stopped_at: at, stop_reason: reason, stopped_by_user_id: null })
+      .where("id", "=", id)
+      .where("stopped_at", "is", null)
+      .where("origin", "=", "auto")
+      .executeTakeFirst();
+    return changed(r.numUpdatedRows);
+  }
+
+  async listTrackingSources(trackedMessageId: number): Promise<TargetSource[]> {
+    const rows = await this.db
+      .selectFrom("tracking_sources")
+      .select(["source_type", "source_ref"])
+      .where("tracked_message_id", "=", trackedMessageId)
+      .orderBy("source_type")
+      .orderBy("source_ref")
+      .execute();
+    return rows.map(toSource);
+  }
+
+  async listActiveAuto(filter: {
+    guildId?: Snowflake;
+    channelIds?: readonly Snowflake[];
+  }): Promise<TrackedMessage[]> {
+    if (filter.channelIds?.length === 0) return [];
+    let q = this.db
+      .selectFrom("tracked_messages")
+      .selectAll()
+      .where("stopped_at", "is", null)
+      .where("origin", "=", "auto");
+    if (filter.guildId !== undefined) q = q.where("guild_id", "=", filter.guildId);
+    if (filter.channelIds !== undefined) q = q.where("channel_id", "in", filter.channelIds);
+    return (await q.orderBy("id").execute()).map(toTracked);
+  }
+
+  /** Active auto trackings of the guild whose frozen sources contain any of the roles. */
+  async listActiveAutoIdsByMessageRoles(
+    guildId: Snowflake,
+    roleIds: readonly Snowflake[],
+  ): Promise<number[]> {
+    if (roleIds.length === 0) return [];
+    const rows = await this.db
+      .selectFrom("tracking_sources as s")
+      .innerJoin("tracked_messages as t", "t.id", "s.tracked_message_id")
+      .select("t.id")
+      .distinct()
+      .where("s.source_type", "=", "role")
+      .where("s.source_ref", "in", roleIds)
+      .where("t.guild_id", "=", guildId)
+      .where("t.stopped_at", "is", null)
+      .where("t.origin", "=", "auto")
+      .orderBy("t.id")
+      .execute();
+    return rows.map((r) => r.id);
+  }
+
+  async listActiveAutoIdsWithTarget(guildId: Snowflake, userId: Snowflake): Promise<number[]> {
+    const rows = await this.db
+      .selectFrom("tracking_targets as g")
+      .innerJoin("tracked_messages as t", "t.id", "g.tracked_message_id")
+      .select("t.id")
+      .where("g.user_id", "=", userId)
+      .where("t.guild_id", "=", guildId)
+      .where("t.stopped_at", "is", null)
+      .where("t.origin", "=", "auto")
+      .orderBy("t.id")
+      .execute();
+    return rows.map((r) => r.id);
+  }
+
+  /** Distinct role sources of the guild's active auto trackings (referenced-role input). */
+  async activeMessageRoleIds(guildId: Snowflake): Promise<Snowflake[]> {
+    const rows = await this.db
+      .selectFrom("tracking_sources as s")
+      .innerJoin("tracked_messages as t", "t.id", "s.tracked_message_id")
+      .select("s.source_ref")
+      .distinct()
+      .where("s.source_type", "=", "role")
+      .where("t.guild_id", "=", guildId)
+      .where("t.stopped_at", "is", null)
+      .where("t.origin", "=", "auto")
+      .execute();
+    return rows.map((r) => r.source_ref);
+  }
+
+  /**
+   * The single destructive target path for auto trackings (spec §6.2 step 4). Touches only an
+   * active row with origin 'auto'. Removed users lose target/evidence/ack; added users get
+   * addedAt = at, addedBy '0'. An empty desired set deletes every target and then stops with
+   * no_eligible_targets (D7), in the same transaction.
+   */
+  async reconcileAutoTargets(
+    trackedMessageId: number,
+    desired: readonly Snowflake[],
+    at: UnixMs,
+  ): Promise<AutoReconcileResult> {
+    return this.db.transaction().execute(async (trx) => {
+      const row = await trx
+        .selectFrom("tracked_messages")
+        .select("id")
+        .where("id", "=", trackedMessageId)
+        .where("stopped_at", "is", null)
+        .where("origin", "=", "auto")
+        .executeTakeFirst();
+      if (!row) return { status: "inactive" as const };
+      const current = (await this.listTargets(trackedMessageId, trx)).map((t) => t.userId);
+      const currentSet = new Set(current);
+      const next = new Set(desired);
+      const removed = current.filter((u) => !next.has(u));
+      if (next.size === 0) {
+        await deleteUsersFromTracking(trx, trackedMessageId, removed);
+        await trx
+          .updateTable("tracked_messages")
+          .set({ stopped_at: at, stop_reason: "no_eligible_targets", stopped_by_user_id: null })
+          .where("id", "=", trackedMessageId)
+          .execute();
+        return { status: "stopped" as const, removed };
+      }
+      const added = [...next].filter((u) => !currentSet.has(u));
+      if (added.length === 0 && removed.length === 0) return { status: "unchanged" as const };
+      await deleteUsersFromTracking(trx, trackedMessageId, removed);
+      if (added.length > 0) {
+        await trx
+          .insertInto("tracking_targets")
+          .values(
+            added.map((userId) => ({
+              tracked_message_id: trackedMessageId,
+              user_id: userId,
+              added_by_user_id: "0",
+              added_at: at,
+            })),
+          )
+          .execute();
+      }
+      return { status: "changed" as const, added, removed };
+    });
+  }
+
   // ---------------------------------------------------------------- targets
 
   async listTargets(trackedMessageId: number, db: Db = this.db): Promise<Target[]> {
@@ -350,15 +562,7 @@ export class Repository {
       const next = new Set(userIds);
       const added = [...next].filter((u) => !current.has(u));
       const removed = [...current].filter((u) => !next.has(u));
-      if (removed.length > 0) {
-        for (const table of ["tracking_targets", "evidence", "acknowledgements"] as const) {
-          await trx
-            .deleteFrom(table)
-            .where("tracked_message_id", "=", trackedMessageId)
-            .where("user_id", "in", removed)
-            .execute();
-        }
-      }
+      await deleteUsersFromTracking(trx, trackedMessageId, removed);
       if (added.length > 0) {
         await trx
           .insertInto("tracking_targets")
@@ -603,7 +807,10 @@ export class Repository {
     });
   }
 
-  /** Deletion request: removes the user's rows everywhere and anonymizes references to "0". */
+  /**
+   * Deletion request: removes the user's rows everywhere (including their `user` tracking sources)
+   * and anonymizes references (tracking and policy actors) to "0".
+   */
   async forgetUser(userId: Snowflake): Promise<number[]> {
     return this.db.transaction().execute(async (trx) => {
       const affected = new Set<number>();
@@ -624,6 +831,25 @@ export class Repository {
           .execute();
         for (const r of rows) affected.add(r.id);
       }
+      const sources = await trx
+        .deleteFrom("tracking_sources")
+        .where("source_type", "=", "user")
+        .where("source_ref", "=", userId)
+        .returning("tracked_message_id")
+        .execute();
+      for (const r of sources) affected.add(r.tracked_message_id);
+      for (const col of ["created_by_user_id", "updated_by_user_id", "state_changed_by"] as const) {
+        await trx
+          .updateTable("auto_track_policies")
+          .set({ [col]: "0" })
+          .where(col, "=", userId)
+          .execute();
+      }
+      await trx
+        .updateTable("auto_track_policy_sources")
+        .set({ added_by_user_id: "0" })
+        .where("added_by_user_id", "=", userId)
+        .execute();
       return [...affected];
     });
   }
