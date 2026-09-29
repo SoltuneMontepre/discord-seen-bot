@@ -1,9 +1,21 @@
+import { AutoTrackCoordinator } from "../../src/app/auto-track-coordinator.ts";
+import { BackfillQueue } from "../../src/app/backfill-queue.ts";
+import { ExplicitUserResolver } from "../../src/app/explicit-user-resolver.ts";
 import { GatewayHealth } from "../../src/app/gateway-health.ts";
+import { GuildAutoTrackHealth } from "../../src/app/guild-auto-track-health.ts";
+import { GuildQueue } from "../../src/app/guild-queue.ts";
+import { MemberRoleIndex } from "../../src/app/member-role-index.ts";
+import { MemberStateRebuilder } from "../../src/app/member-state-rebuilder.ts";
 import type { Clock, Logger } from "../../src/app/ports.ts";
 import { Reconciler } from "../../src/app/reconciler.ts";
 import { RenderScheduler } from "../../src/app/render-scheduler.ts";
+import { RoleSourceResolver } from "../../src/app/role-source-resolver.ts";
 import { Sweeper } from "../../src/app/sweeper.ts";
+import { TargetReconciler } from "../../src/app/target-reconciler.ts";
+import { TargetResolverRegistry } from "../../src/app/target-resolution.ts";
 import { TrackingService } from "../../src/app/tracking-service.ts";
+import { PolicyRepository } from "../../src/db/policy-repository.ts";
+import { RoleDeletionStore } from "../../src/db/role-deletion.ts";
 import { cardRenderer } from "../../src/discord/render/card.ts";
 import { DEFAULT_POLICY, type Policy } from "../../src/domain/policy.ts";
 import { createTestDb } from "./db.ts";
@@ -86,3 +98,113 @@ export async function createApp(
 }
 
 export type TestApp = Awaited<ReturnType<typeof createApp>>;
+
+// ------------------------------------------------------------------ M9 graph
+
+export interface AutoAppOptions {
+  features: { mentionAutoTrack: boolean; roleTargets: boolean };
+  policy?: Partial<Policy>;
+  dbPath?: string;
+  discord?: FakeDiscord;
+}
+
+/**
+ * createApp + the M9 auto-track graph, wired like createBot: the coordinator when either flag is
+ * on; health, index, role resolver and rebuilder only when role targets are on.
+ */
+export async function createAutoApp(opts: AutoAppOptions) {
+  const app = await createApp({
+    ...(opts.dbPath ? { dbPath: opts.dbPath } : {}),
+    ...(opts.discord ? { discord: opts.discord } : {}),
+    ...(opts.policy ? { policy: opts.policy } : {}),
+  });
+  const roles = opts.features.roleTargets;
+  const policies = new PolicyRepository(app.db);
+  const queue = new GuildQueue();
+  const index = roles ? new MemberRoleIndex() : undefined;
+  let rebuilder: MemberStateRebuilder | undefined;
+  const autoHealth = roles
+    ? new GuildAutoTrackHealth({
+        clock: app.clock,
+        policy: app.policy,
+        onPauseNoticeDue: (g) => void rebuilder?.refreshRoleDependentCards(g),
+        logger: app.logger,
+      })
+    : undefined;
+  const registry = new TargetResolverRegistry();
+  registry.register(new ExplicitUserResolver());
+  if (index) registry.register(new RoleSourceResolver(index));
+  const backfillQueue = new BackfillQueue({
+    backfill: (id, users) => app.reconciler.backfillTargets(id, users),
+    concurrency: app.policy.backfillConcurrency,
+    logger: app.logger,
+  });
+  const targetReconciler = new TargetReconciler({
+    features: opts.features,
+    repo: app.repo,
+    policies,
+    registry,
+    health: autoHealth,
+    queue,
+    scheduler: app.scheduler,
+    backfill: backfillQueue,
+    policy: app.policy,
+    clock: app.clock,
+    logger: app.logger,
+  });
+  if (roles && index && autoHealth) {
+    rebuilder = new MemberStateRebuilder({
+      port: app.discord,
+      policies,
+      repo: app.repo,
+      roleDeletion: new RoleDeletionStore(app.db),
+      index,
+      health: autoHealth,
+      queue,
+      reconciler: targetReconciler,
+      scheduler: app.scheduler,
+      policy: app.policy,
+      clock: app.clock,
+      logger: app.logger,
+    });
+  }
+  const coordinator = new AutoTrackCoordinator({
+    features: opts.features,
+    repo: app.repo,
+    policies,
+    registry,
+    health: autoHealth,
+    index,
+    rebuilder,
+    queue,
+    service: app.service,
+    backfill: app.reconciler,
+    policy: app.policy,
+    clock: app.clock,
+    logger: app.logger,
+  });
+  return {
+    ...app,
+    features: opts.features,
+    policies,
+    queue,
+    index,
+    /** M9 member-state health (app.health stays the gateway health). */
+    autoHealth,
+    registry,
+    backfillQueue,
+    targetReconciler,
+    rebuilder,
+    coordinator,
+    /** Waits for every task queued so far for the guild. */
+    settle: (guildId: string) => queue.run(guildId, async () => {}),
+    async dispose() {
+      rebuilder?.dispose();
+      autoHealth?.dispose();
+      backfillQueue.dispose();
+      await app.dispose();
+    },
+  };
+}
+
+export type AutoApp = Awaited<ReturnType<typeof createAutoApp>>;

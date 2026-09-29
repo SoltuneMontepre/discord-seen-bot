@@ -2,6 +2,7 @@ import type { Repository, TrackingView } from "../db/repository.ts";
 import { isValidEvidence } from "../domain/evidence-validity.ts";
 import type { Policy } from "../domain/policy.ts";
 import { reactionKeysForEmoji, type Signal } from "../domain/signals.ts";
+import type { TargetSource } from "../domain/target-sources.ts";
 import type {
   Ack,
   EvidenceKind,
@@ -32,6 +33,24 @@ export interface StartInput {
   /** Already passed through eligibleTargets(); must be non-empty. */
   targets: readonly Snowflake[];
 }
+
+export interface AutoInsertInput {
+  guildId: Snowflake;
+  channelId: Snowflake;
+  channelType: number;
+  sourceMessageId: Snowflake;
+  sourceAuthorId: Snowflake;
+  sourceCreatedAt: UnixMs;
+  /** Desired targets (union, deduped, author and bots removed, within the D8 limit). */
+  targets: readonly Snowflake[];
+  /** Frozen message sources (explicit users, mentioned roles); policy roles stay live. */
+  sources: readonly TargetSource[];
+}
+
+export type AutoPublishResult =
+  | { status: "published" }
+  | { status: "rolled_back"; error: CreateCompanionError }
+  | { status: "gone" };
 
 export type StartResult =
   | { kind: "started"; tracked: TrackedMessage; statusMessageId: Snowflake }
@@ -148,6 +167,68 @@ export class TrackingService {
       };
     }
     return { kind: "being_set_up" };
+  }
+
+  /**
+   * Auto tracking phase A (spec §8.1): one transaction, creator = author, targets added at
+   * createdAt, status_message_id NULL. Any active tracking of the message, or any earlier auto
+   * tracking of it, is a silent "exists".
+   */
+  async insertAutoTracking(
+    input: AutoInsertInput,
+  ): Promise<{ ok: true; tracked: TrackedMessage } | { ok: false; reason: "exists" }> {
+    const now = this.clock.now();
+    const r = await this.repo.insertAutoTracking(
+      {
+        guildId: input.guildId,
+        channelId: input.channelId,
+        parentChannelId: null,
+        sourceMessageId: input.sourceMessageId,
+        sourceAuthorId: input.sourceAuthorId,
+        sourceCreatedAt: input.sourceCreatedAt,
+        creatorUserId: input.sourceAuthorId,
+        createdAt: now,
+        weakWindowEndsAt: now + this.policy.weakWindowMs,
+        expiresAt: now + this.policy.trackingTtlMs,
+        channelType: input.channelType,
+      },
+      input.targets,
+      input.sources,
+    );
+    return r.ok ? r : { ok: false, reason: "exists" };
+  }
+
+  /**
+   * Auto tracking phase B (outside the guild queue): post the companion as a reply, store its id,
+   * then markDirty so changes made while publishing (member events, a reconcile stop) render.
+   * Any failure rolls the row back (sources cascade).
+   */
+  async publishAutoCompanion(trackedId: number): Promise<AutoPublishResult> {
+    const tracked = await this.repo.getTracked(trackedId);
+    if (!tracked || tracked.statusMessageId !== null) return { status: "gone" };
+    const card = await this.renderCard(trackedId);
+    if (!card) return { status: "gone" };
+    const created = await this.port.createCompanion({
+      channelId: tracked.channelId,
+      sourceMessageId: tracked.sourceMessageId,
+      nonce: `sb1t${tracked.id}`,
+      body: card.body,
+    });
+    if (!created.ok) {
+      await this.repo.deleteTracking(tracked.id);
+      return { status: "rolled_back", error: created.error };
+    }
+    try {
+      await this.repo.setStatusMessageId(tracked.id, created.messageId);
+      await this.repo.setRenderedHash(tracked.id, card.hash);
+    } catch (error) {
+      this.logger.error({ trackedId: tracked.id, err: error }, "failed to store companion id");
+      await this.port.deleteMessage(tracked.channelId, created.messageId).catch(() => {});
+      await this.repo.deleteTracking(tracked.id).catch(() => {});
+      return { status: "rolled_back", error: { kind: "Unknown" } };
+    }
+    this.scheduler.markDirty(tracked.id);
+    return { status: "published" };
   }
 
   /**

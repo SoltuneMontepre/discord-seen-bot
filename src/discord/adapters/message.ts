@@ -44,6 +44,8 @@ export interface MessageCreateLike extends MessageLike {
   flags?: number;
   mentions?: readonly { id: string; bot?: boolean }[];
   mention_roles?: readonly string[];
+  /** @everyone / @here: never a target source (read by nothing). */
+  mention_everyone?: boolean;
   message_reference?: { message_id?: string; type?: number };
   message_snapshots?: readonly {
     message: { mentions?: readonly { id: string }[]; mention_roles?: readonly string[] };

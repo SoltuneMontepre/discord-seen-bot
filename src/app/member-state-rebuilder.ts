@@ -206,6 +206,11 @@ export class MemberStateRebuilder {
     this.clearTimer(guildId);
     this.deps.health.set(guildId, "healthy");
     if (!wasPaused) return;
+    if (reason === "roles_grew") {
+      // Extension of a healthy guild's index (policy change, newly mentioned role): not a resume.
+      this.deps.logger.debug({ guildId }, "member state extended for new referenced roles");
+      return;
+    }
     this.deps.logger.info(
       {
         guildId,
