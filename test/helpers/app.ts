@@ -1,11 +1,13 @@
 import { AutoTrackCoordinator } from "../../src/app/auto-track-coordinator.ts";
 import { BackfillQueue } from "../../src/app/backfill-queue.ts";
+import { ConfigAuthorizer } from "../../src/app/config-authorizer.ts";
 import { ExplicitUserResolver } from "../../src/app/explicit-user-resolver.ts";
 import { GatewayHealth } from "../../src/app/gateway-health.ts";
 import { GuildAutoTrackHealth } from "../../src/app/guild-auto-track-health.ts";
 import { GuildQueue } from "../../src/app/guild-queue.ts";
 import { MemberRoleIndex } from "../../src/app/member-role-index.ts";
 import { MemberStateRebuilder } from "../../src/app/member-state-rebuilder.ts";
+import { PolicyService } from "../../src/app/policy-service.ts";
 import type { Clock, Logger } from "../../src/app/ports.ts";
 import { Reconciler } from "../../src/app/reconciler.ts";
 import { RenderScheduler } from "../../src/app/render-scheduler.ts";
@@ -191,9 +193,29 @@ export async function createAutoApp(opts: AutoAppOptions) {
     clock: app.clock,
     logger: app.logger,
   });
+  const authorizer = new ConfigAuthorizer();
+  const policyService =
+    rebuilder && index && autoHealth
+      ? new PolicyService({
+          policies,
+          authorizer,
+          registry,
+          index,
+          health: autoHealth,
+          queue,
+          rebuilder,
+          reconciler: targetReconciler,
+          coordinator,
+          policy: app.policy,
+          clock: app.clock,
+          logger: app.logger,
+        })
+      : undefined;
   return {
     ...app,
     features: opts.features,
+    authorizer,
+    policyService,
     policies,
     queue,
     index,
