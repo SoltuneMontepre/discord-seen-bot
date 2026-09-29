@@ -56,6 +56,9 @@ export interface TrackedMessage {
   stopReason: StopReason | null;
   stoppedByUserId: Snowflake | null;
   renderedHash: string | null;
+  origin: TrackingOrigin;
+  /** Discord channel type of an auto tracking's source location (D4); null for manual/legacy rows. */
+  channelType: number | null;
 }
 
 export interface Target {

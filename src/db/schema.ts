@@ -1,5 +1,6 @@
 import type { Generated } from "kysely";
-import type { EvidenceKind, StopReason } from "../domain/types.ts";
+import type { PolicyState } from "../domain/policy-state.ts";
+import type { EvidenceKind, StopReason, TrackingOrigin } from "../domain/types.ts";
 
 export interface TrackedMessagesTable {
   id: Generated<number>;
@@ -19,6 +20,8 @@ export interface TrackedMessagesTable {
   stop_reason: StopReason | null;
   stopped_by_user_id: string | null;
   rendered_hash: string | null;
+  origin: Generated<TrackingOrigin>;
+  channel_type: number | null;
 }
 
 export interface TrackingTargetsTable {
@@ -49,10 +52,41 @@ export interface BotStateTable {
   value: string;
 }
 
+export interface TrackingSourcesTable {
+  tracked_message_id: number;
+  source_type: string;
+  source_ref: string;
+}
+
+export interface AutoTrackPoliciesTable {
+  id: Generated<number>;
+  guild_id: string;
+  channel_id: string;
+  name: string;
+  state: PolicyState;
+  state_changed_at: number;
+  state_changed_by: string;
+  created_at: number;
+  created_by_user_id: string;
+  updated_at: number;
+  updated_by_user_id: string;
+}
+
+export interface AutoTrackPolicySourcesTable {
+  policy_id: number;
+  source_type: string;
+  source_ref: string;
+  added_at: number;
+  added_by_user_id: string;
+}
+
 export interface Database {
   tracked_messages: TrackedMessagesTable;
   tracking_targets: TrackingTargetsTable;
   evidence: EvidenceTable;
   acknowledgements: AcknowledgementsTable;
   bot_state: BotStateTable;
+  tracking_sources: TrackingSourcesTable;
+  auto_track_policies: AutoTrackPoliciesTable;
+  auto_track_policy_sources: AutoTrackPolicySourcesTable;
 }

@@ -66,6 +66,8 @@ function toTracked(r: Selectable<TrackedMessagesTable>): TrackedMessage {
     stopReason: r.stop_reason,
     stoppedByUserId: r.stopped_by_user_id,
     renderedHash: r.rendered_hash,
+    origin: r.origin,
+    channelType: r.channel_type,
   };
 }
 

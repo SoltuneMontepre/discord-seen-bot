@@ -27,6 +27,8 @@ const tracked: TrackedMessage = {
   stopReason: null,
   stoppedByUserId: null,
   renderedHash: null,
+  origin: "manual",
+  channelType: null,
 };
 
 const rows: ProjectionRow[] = [

@@ -9,6 +9,11 @@
 > - Local re-verification: `pnpm check` ✅ (20 files / 231 tests); `pnpm test:coverage` ✅ (90.33 / 80.34 / 91.19 / 94.01 %).
 > - Recorded in `docs/manual-checklist.md` › M8 gate record.
 
+> **Execution rulings** (smallest deviations recorded during implementation; spec unchanged):
+> 1. *Task 4:* the three new stop-line strings land in Task 4, not Task 16, because the exhaustive `stopLine()` switch must compile once `StopReason` grows.
+> 2. *Task 5:* `TrackedMessage.origin` / `channelType` are added with the schema in Task 5 (the row mapper needs them), not in Task 6.
+> 3. *Task 5:* Kysely 0.29's `SqliteAdapter.supportsTransactionalDdl` is `false`, so the Migrator does **not** wrap migrations in a transaction (the plan's "migrator's single transaction" premise is wrong). Migration 0002 opens its own `db.transaction()` around every statement including the in-migration `foreign_key_check`, and carries a re-entry guard (schema already migrated ⇒ no-op) for a crash between its commit and Kysely recording the row. FK pragma handling in `migrateToLatest()` is unchanged.
+
 **Goal:** Implement M9, automatic tracking driven by channel role policies and message mentions, without regressing existing manual *Apps → Track Seen* behaviour.
 
 **Architecture.**
