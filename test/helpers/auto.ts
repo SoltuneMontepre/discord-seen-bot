@@ -38,8 +38,15 @@ export function message(
   };
 }
 
-/** Adapter → coordinator, as the gateway does (awaiting both phases). */
+/**
+ * The message lands in the fake channel (as on Discord), then adapter → coordinator as the gateway
+ * does (awaiting both phases).
+ */
 export async function post(app: AutoApp, payload: MessageCreateLike) {
+  const stored = app.discord.channels.get(payload.channel_id) ?? [];
+  if (!stored.some((m) => m.id === payload.id)) {
+    app.discord.addMessage(payload.channel_id, payload.id, payload.author.id);
+  }
   const c = messageToAutoTrackCandidate(payload, app.features);
   if (c) await app.coordinator.onTopLevelMessage(c);
   return c;

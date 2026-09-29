@@ -176,6 +176,8 @@ export async function createAutoApp(opts: AutoAppOptions) {
     health: autoHealth,
     index,
     rebuilder,
+    roleDeletion: new RoleDeletionStore(app.db),
+    reconciler: targetReconciler,
     queue,
     service: app.service,
     backfill: app.reconciler,
