@@ -11,6 +11,8 @@ export class Sweeper {
   private readonly policy: Policy;
   private readonly logger: Logger;
   private timer: ReturnType<typeof setInterval> | undefined;
+  /** Runs after each interval sweep (M9: schedules referenced-role prunes). */
+  afterTick: () => void = () => {};
 
   constructor(deps: {
     repo: Repository;
@@ -40,7 +42,9 @@ export class Sweeper {
 
   start(): void {
     this.timer = setInterval(() => {
-      this.runOnce().catch((err: unknown) => this.logger.error({ err }, "sweep failed"));
+      this.runOnce()
+        .catch((err: unknown) => this.logger.error({ err }, "sweep failed"))
+        .finally(() => this.afterTick());
     }, this.policy.sweepIntervalMs);
   }
 

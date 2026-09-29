@@ -4,11 +4,13 @@ import {
   type GatewayInteractionCreateDispatchData,
 } from "@discordjs/core";
 import { WebSocketShardEvents } from "@discordjs/ws";
+import type { AutoTrackCoordinator } from "../app/auto-track-coordinator.ts";
 import type { GatewayHealth } from "../app/gateway-health.ts";
 import type { Logger } from "../app/ports.ts";
 import type { Reconciler } from "../app/reconciler.ts";
 import type { TrackingService } from "../app/tracking-service.ts";
 import type { Signal } from "../domain/signals.ts";
+import type { MemberStateEvent } from "../domain/target-sources.ts";
 import {
   channelDeleteToSignal,
   guildDeleteToSignal,
@@ -17,7 +19,18 @@ import {
   threadDeleteToSignal,
   threadUpdateToSignal,
 } from "./adapters/lifecycle.ts";
-import { messageToSignal } from "./adapters/message.ts";
+import {
+  guildCreateToEvent,
+  guildDeleteToMemberEvent,
+  memberRemoveToEvent,
+  memberUpsertToEvent,
+  roleDeleteToEvent,
+} from "./adapters/member.ts";
+import {
+  type MessageCreateLike,
+  messageToAutoTrackCandidate,
+  messageToSignal,
+} from "./adapters/message.ts";
 import {
   reactionAddToSignal,
   reactionRemoveAllToSignal,
@@ -40,6 +53,37 @@ export interface GatewayDeps {
   service: Pick<TrackingService, "recordSignal">;
   router: Pick<InteractionRouter, "handle">;
   logger: Logger;
+  /** M9: present when either auto-track flag is on. Member events are wired only with roleTargets. */
+  autoTrack?: {
+    coordinator: Pick<AutoTrackCoordinator, "onTopLevelMessage" | "onMemberEvent" | "onReady">;
+    features: { mentionAutoTrack: boolean; roleTargets: boolean };
+  };
+  /** Unrecoverable gateway condition (e.g. 4014 disallowed intents). */
+  onFatal?: (reason: string) => void;
+}
+
+/** Close code for a privileged intent the Developer Portal has not enabled (no reconnect). */
+export const DISALLOWED_INTENTS_CLOSE_CODE = 4014;
+export const DISALLOWED_INTENTS_MESSAGE =
+  "Disallowed intents: enable Server Members Intent in the Developer Portal or set ROLE_TARGETS_ENABLED=false";
+
+/** Member/role/guild dispatch → member-state event (role flag on only). */
+export function dispatchToMemberEvent(p: GatewayDispatchPayload): MemberStateEvent | null {
+  switch (p.t) {
+    case GatewayDispatchEvents.GuildMemberAdd:
+    case GatewayDispatchEvents.GuildMemberUpdate:
+      return memberUpsertToEvent(p.d);
+    case GatewayDispatchEvents.GuildMemberRemove:
+      return memberRemoveToEvent(p.d);
+    case GatewayDispatchEvents.GuildRoleDelete:
+      return roleDeleteToEvent(p.d);
+    case GatewayDispatchEvents.GuildCreate:
+      return guildCreateToEvent(p.d);
+    case GatewayDispatchEvents.GuildDelete:
+      return guildDeleteToMemberEvent(p.d);
+    default:
+      return null;
+  }
 }
 
 /** Pure mapping of a dispatch payload to a signal (or null when irrelevant). */
@@ -83,7 +127,9 @@ export function attachGateway(gateway: GatewayLike, deps: GatewayDeps): void {
   const run = (what: string, work: () => Promise<unknown>) =>
     void work().catch((err: unknown) => deps.logger.error({ err, what }, "gateway handler failed"));
 
+  const auto = deps.autoTrack;
   gateway.on(WebSocketShardEvents.Ready, () => {
+    auto?.coordinator.onReady();
     const { readyAt } = deps.health.onReady();
     deps.logger.info({ readyAt }, "gateway ready (fresh session)");
     run("fresh session reconcile", () => deps.reconciler.onFreshSession(readyAt));
@@ -92,7 +138,13 @@ export function attachGateway(gateway: GatewayLike, deps: GatewayDeps): void {
     deps.health.onResumed();
     deps.logger.info({}, "gateway resumed; missed events replayed by Discord");
   });
-  gateway.on(WebSocketShardEvents.Closed, (code: number) => deps.health.onClosed(code));
+  gateway.on(WebSocketShardEvents.Closed, (code: number) => {
+    deps.health.onClosed(code);
+    if (code === DISALLOWED_INTENTS_CLOSE_CODE) {
+      deps.logger.error({ code }, DISALLOWED_INTENTS_MESSAGE);
+      deps.onFatal?.(DISALLOWED_INTENTS_MESSAGE);
+    }
+  });
   gateway.on(WebSocketShardEvents.HeartbeatComplete, (stats: { ackAt: number }) =>
     deps.health.onHeartbeatAck(stats.ackAt),
   );
@@ -107,5 +159,19 @@ export function attachGateway(gateway: GatewayLike, deps: GatewayDeps): void {
     }
     const signal = dispatchToSignal(payload);
     if (signal) run(signal.t, () => deps.service.recordSignal(signal));
+    if (!auto) return;
+    if (payload.t === GatewayDispatchEvents.MessageCreate) {
+      const d = payload.d as MessageCreateLike;
+      const candidate = messageToAutoTrackCandidate(d, auto.features);
+      if (candidate) {
+        run("auto-track", () => auto.coordinator.onTopLevelMessage(candidate));
+      } else if (d.guild_id && d.type === 0 && !d.author.bot && d.channel_type === undefined) {
+        deps.logger.debug({ messageId: d.id }, "auto-track skipped: channel_type missing");
+      }
+      return;
+    }
+    if (!auto.features.roleTargets) return;
+    const event = dispatchToMemberEvent(payload);
+    if (event) run(event.t, () => auto.coordinator.onMemberEvent(event));
   });
 }

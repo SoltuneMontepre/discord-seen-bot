@@ -80,6 +80,12 @@ export interface SignalFailureHooks {
   onReactionSignalFailed(sourceMessageId: Snowflake): void;
 }
 
+/** Called after the existing CHANNEL_DELETED / GUILD_REMOVED handling (M9 policy cleanup). */
+export interface LifecycleHooks {
+  onChannelDeleted(channelId: Snowflake): Promise<void>;
+  onGuildRemoved(guildId: Snowflake): Promise<void>;
+}
+
 export class TrackingService {
   private readonly repo: Repository;
   private readonly port: DiscordPort;
@@ -90,6 +96,7 @@ export class TrackingService {
   private readonly logger: Logger;
   hooks: SignalFailureHooks = { onMessageSignalFailed() {}, onReactionSignalFailed() {} };
   pauseProvider: PauseProvider = neverPaused;
+  lifecycle: LifecycleHooks = { async onChannelDeleted() {}, async onGuildRemoved() {} };
 
   constructor(deps: {
     repo: Repository;
@@ -470,6 +477,7 @@ export class TrackingService {
       case "CHANNEL_DELETED": {
         for (const t of await this.repo.listActiveInChannelOrParent(signal.channelId))
           await this.stop(t.id, "channel_deleted", null);
+        await this.lifecycle.onChannelDeleted(signal.channelId);
         return;
       }
       case "THREAD_UNARCHIVED": {
@@ -480,6 +488,7 @@ export class TrackingService {
       case "GUILD_REMOVED": {
         const n = await this.repo.purgeGuild(signal.guildId);
         this.logger.info({ guildId: signal.guildId, purged: n }, "bot removed from guild; purged");
+        await this.lifecycle.onGuildRemoved(signal.guildId);
         return;
       }
     }

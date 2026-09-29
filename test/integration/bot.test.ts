@@ -205,3 +205,95 @@ describe("dispatchToSignal", () => {
     ).toEqual({ t: "GUILD_REMOVED", guildId: "g" });
   });
 });
+
+describe("M9 gateway wiring", () => {
+  let m9: import("../helpers/bot.ts").BotHarness;
+  afterEach(async () => m9?.close());
+
+  const make = async (features: { mentionAutoTrack: boolean; roleTargets: boolean }) => {
+    const { makeBot } = await import("../helpers/bot.ts");
+    m9 = await makeBot({ features });
+    await m9.bot.start();
+    return m9;
+  };
+
+  it("RESUMED triggers no rebuild and no health change", async () => {
+    await make({ mentionAutoTrack: false, roleTargets: true });
+    m9.bot.m9.autoHealth?.set("500", "healthy");
+    m9.gateway.emit(WebSocketShardEvents.Resumed, 0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(m9.bot.m9.autoHealth?.state("500")).toBe("healthy");
+    expect(m9.discord.count("getGuildRoleIds")).toBe(0);
+  });
+
+  it("READY → every guild awaiting_guild; GUILD_CREATE → rebuild", async () => {
+    await make({ mentionAutoTrack: false, roleTargets: true });
+    await m9.bot.m9.policies.create({
+      guildId: "500",
+      channelId: "600",
+      name: "p",
+      roleIds: ["700"],
+      actor: "9",
+      at: T0,
+    });
+    m9.discord.guildRoles.set("500", ["500", "700"]);
+    m9.bot.m9.autoHealth?.set("500", "healthy");
+    m9.gateway.emit(WebSocketShardEvents.Ready, {}, 0);
+    expect(m9.bot.m9.autoHealth?.state("500")).toBe("awaiting_guild");
+    m9.gateway.dispatch(GatewayDispatchEvents.GuildCreate, { id: "500" });
+    await vi.waitFor(() => expect(m9.bot.m9.autoHealth?.state("500")).toBe("healthy"));
+    expect(m9.discord.count("listGuildMembers")).toBe(1);
+  });
+
+  it("close code 4014 invokes onFatal with the explicit message", async () => {
+    await make({ mentionAutoTrack: false, roleTargets: true });
+    m9.gateway.emit(WebSocketShardEvents.Closed, 4014, 0);
+    expect(m9.fatal).toEqual([
+      "Disallowed intents: enable Server Members Intent in the Developer Portal or set ROLE_TARGETS_ENABLED=false",
+    ]);
+  });
+
+  it("member events are not handled when the role flag is off", async () => {
+    await make({ mentionAutoTrack: true, roleTargets: false });
+    m9.gateway.dispatch(GatewayDispatchEvents.GuildCreate, { id: "500" });
+    m9.gateway.dispatch(GatewayDispatchEvents.GuildMemberUpdate, {
+      guild_id: "500",
+      user: { id: "1" },
+      roles: [],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(m9.bot.m9.autoHealth).toBeUndefined();
+    expect(m9.discord.count("getGuildRoleIds")).toBe(0);
+  });
+
+  it("a sweeper tick schedules a referenced-role prune per indexed guild", async () => {
+    await make({ mentionAutoTrack: false, roleTargets: true });
+    m9.bot.m9.index?.setReferencedRoles("500", ["700"]);
+    m9.bot.m9.index?.setReferencedRoles("501", ["800"]);
+    const spy = vi.spyOn(
+      m9.bot.m9.coordinator as NonNullable<typeof m9.bot.m9.coordinator>,
+      "requestReferencedRolePrune",
+    );
+    await vi.advanceTimersByTimeAsync(DEFAULT_POLICY.sweepIntervalMs);
+    await vi.waitFor(() => expect(spy.mock.calls.map((c) => c[0]).sort()).toEqual(["500", "501"]));
+  });
+
+  it("a missing channel_type is logged at debug and creates nothing", async () => {
+    await make({ mentionAutoTrack: true, roleTargets: false });
+    m9.gateway.dispatch(GatewayDispatchEvents.MessageCreate, {
+      id: nextId(T0),
+      channel_id: CHANNEL,
+      guild_id: "500",
+      type: 0,
+      author: { id: AUTHOR },
+      mentions: [{ id: "1" }],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await m9.bot.repo.listActiveAuto({})).toEqual([]);
+    expect(
+      m9.logger.entries.some(
+        (e) => e.level === "debug" && e.msg === "auto-track skipped: channel_type missing",
+      ),
+    ).toBe(true);
+  });
+});
