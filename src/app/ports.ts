@@ -73,6 +73,13 @@ export interface SourceMessageInfo {
   reactions: { emojiKey: string; apiEmoji: string; normal: number; burst: number }[];
 }
 
+/** One guild member as the role index needs it (ids only). */
+export interface GuildMemberRoles {
+  userId: Snowflake;
+  roleIds: Snowflake[];
+  bot: boolean;
+}
+
 export interface DiscordPort {
   createCompanion(input: {
     channelId: Snowflake;
@@ -101,4 +108,11 @@ export interface DiscordPort {
     after: Snowflake | undefined,
     limit: number,
   ): Promise<Lookup<{ id: Snowflake; bot: boolean }[]>>;
+  /** List Guild Members (needs GUILD_MEMBERS): up to `limit` members with user id > `after`. */
+  listGuildMembers(
+    guildId: Snowflake,
+    after: Snowflake | undefined,
+    limit: number,
+  ): Promise<Lookup<GuildMemberRoles[]>>;
+  getGuildRoleIds(guildId: Snowflake): Promise<Lookup<Snowflake[]>>;
 }

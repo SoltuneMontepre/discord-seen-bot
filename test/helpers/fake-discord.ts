@@ -3,6 +3,7 @@ import type {
   CreateCompanionError,
   DiscordPort,
   EditCompanionResult,
+  GuildMemberRoles,
   HistoryMessage,
   Lookup,
   SourceMessageInfo,
@@ -66,10 +67,26 @@ export class FakeDiscord implements DiscordPort {
   maxConcurrentGetMessage = 0;
   private activeGetMessage = 0;
   getMessageDelayMs = 0;
+  /** Guild member store (ascending user ids when listed) and role store for M9 rebuilds. */
+  guildMembers = new Map<string, Map<string, GuildMemberRoles>>();
+  guildRoles = new Map<string, string[]>();
+  memberFailures: Failure[] = [];
+  roleFailures: Failure[] = [];
+  memberGate: Promise<void> | null = null;
   companions = new Map<
     string,
     { channelId: string; body: CompanionBody; replyTo: string; nonce: string }
   >();
+
+  setMember(guildId: string, userId: string, roleIds: string[], bot = false): void {
+    const m = this.guildMembers.get(guildId) ?? new Map<string, GuildMemberRoles>();
+    m.set(userId, { userId, roleIds, bot });
+    this.guildMembers.set(guildId, m);
+  }
+
+  removeMember(guildId: string, userId: string): void {
+    this.guildMembers.get(guildId)?.delete(userId);
+  }
 
   count(method: string): number {
     return this.calls.filter((c) => c.method === method).length;
@@ -231,5 +248,31 @@ export class FakeDiscord implements DiscordPort {
     );
     const start = after === undefined ? users : users.filter((u) => BigInt(u.id) > BigInt(after));
     return { ok: true as const, value: start.slice(0, limit) };
+  }
+
+  async listGuildMembers(
+    guildId: string,
+    after: string | undefined,
+    limit: number,
+  ): Promise<Lookup<GuildMemberRoles[]>> {
+    this.calls.push({ method: "listGuildMembers", args: [guildId, after, limit] });
+    if (this.memberGate) await this.memberGate;
+    const f = this.memberFailures.shift();
+    if (f) return f;
+    const all = [...(this.guildMembers.get(guildId)?.values() ?? [])].sort((a, b) =>
+      BigInt(a.userId) < BigInt(b.userId) ? -1 : 1,
+    );
+    const start = after === undefined ? all : all.filter((m) => BigInt(m.userId) > BigInt(after));
+    return {
+      ok: true,
+      value: start.slice(0, limit).map((m) => ({ ...m, roleIds: [...m.roleIds] })),
+    };
+  }
+
+  async getGuildRoleIds(guildId: string): Promise<Lookup<string[]>> {
+    this.calls.push({ method: "getGuildRoleIds", args: [guildId] });
+    const f = this.roleFailures.shift();
+    if (f) return f;
+    return { ok: true, value: [...(this.guildRoles.get(guildId) ?? [])] };
   }
 }

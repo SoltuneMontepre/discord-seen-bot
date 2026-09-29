@@ -1,5 +1,5 @@
 import type { API } from "@discordjs/core";
-import { DiscordAPIError } from "@discordjs/rest";
+import { DiscordAPIError, HTTPError } from "@discordjs/rest";
 import { describe, expect, it, vi } from "vitest";
 import { commandsFor, trackSeenCommand } from "../../src/discord/commands.ts";
 import { CoreDiscordPort } from "../../src/discord/discord-port.ts";
@@ -20,7 +20,15 @@ function fakeApi() {
       { id: "8", bot: true },
     ]),
   };
-  return { api: { channels } as unknown as API, channels };
+  const guilds = {
+    getMembers: vi.fn(async () => [
+      { user: { id: "11" }, roles: ["700", "701"] },
+      { user: { id: "12", bot: true }, roles: [] },
+      { roles: ["700"] }, // no user object: skipped
+    ]),
+    getRoles: vi.fn(async () => [{ id: "500" }, { id: "700" }]),
+  };
+  return { api: { channels, guilds } as unknown as API, channels, guilds };
 }
 
 const body = { flags: 1 << 15, components: [], allowed_mentions: { parse: [] as never[] } };
@@ -113,6 +121,52 @@ describe("CoreDiscordPort request shapes", () => {
       kind: "ArchivedThread",
       code: 50083,
     });
+  });
+});
+
+describe("CoreDiscordPort guild member state (M9)", () => {
+  it("listGuildMembers passes limit and after, maps roles and bot", async () => {
+    const { api, guilds } = fakeApi();
+    const r = await new CoreDiscordPort(api).listGuildMembers("g", "10", 1000);
+    expect(guilds.getMembers).toHaveBeenCalledWith("g", { limit: 1000, after: "10" });
+    expect(r).toEqual({
+      ok: true,
+      value: [
+        { userId: "11", roleIds: ["700", "701"], bot: false },
+        { userId: "12", roleIds: [], bot: true },
+      ],
+    });
+  });
+
+  it("listGuildMembers without a cursor sends no `after`", async () => {
+    const { api, guilds } = fakeApi();
+    await new CoreDiscordPort(api).listGuildMembers("g", undefined, 1000);
+    expect(guilds.getMembers).toHaveBeenCalledWith("g", { limit: 1000 });
+  });
+
+  it("403 → Permanent, 5xx → Transient", async () => {
+    const { api, guilds } = fakeApi();
+    guilds.getMembers.mockRejectedValueOnce(apiError(50001, 403));
+    expect(await new CoreDiscordPort(api).listGuildMembers("g", undefined, 1000)).toMatchObject({
+      ok: false,
+      class: "Permanent",
+      code: 50001,
+    });
+    guilds.getRoles.mockRejectedValueOnce(new HTTPError(503, "x", "GET", "/x", { body: {} }));
+    expect(await new CoreDiscordPort(api).getGuildRoleIds("g")).toMatchObject({
+      ok: false,
+      class: "Transient",
+      code: 503,
+    });
+  });
+
+  it("getGuildRoleIds maps ids", async () => {
+    const { api, guilds } = fakeApi();
+    expect(await new CoreDiscordPort(api).getGuildRoleIds("g")).toEqual({
+      ok: true,
+      value: ["500", "700"],
+    });
+    expect(guilds.getRoles).toHaveBeenCalledWith("g");
   });
 });
 

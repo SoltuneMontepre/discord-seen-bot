@@ -5,6 +5,7 @@ import type {
   CreateCompanionError,
   DiscordPort,
   EditCompanionResult,
+  GuildMemberRoles,
   HistoryMessage,
   Lookup,
   LookupFailureClass,
@@ -215,6 +216,36 @@ export class CoreDiscordPort implements DiscordPort {
         ...(after ? { after } : {}),
       });
       return { ok: true, value: users.map((u) => ({ id: u.id, bot: u.bot === true })) };
+    } catch (err) {
+      return lookupFailure(err);
+    }
+  }
+
+  async listGuildMembers(
+    guildId: string,
+    after: string | undefined,
+    limit: number,
+  ): Promise<Lookup<GuildMemberRoles[]>> {
+    try {
+      const members = await this.api.guilds.getMembers(guildId, {
+        limit,
+        ...(after ? { after } : {}),
+      });
+      const value: GuildMemberRoles[] = [];
+      for (const m of members) {
+        if (!m.user) continue;
+        value.push({ userId: m.user.id, roleIds: [...m.roles], bot: m.user.bot === true });
+      }
+      return { ok: true, value };
+    } catch (err) {
+      return lookupFailure(err);
+    }
+  }
+
+  async getGuildRoleIds(guildId: string): Promise<Lookup<string[]>> {
+    try {
+      const roles = await this.api.guilds.getRoles(guildId);
+      return { ok: true, value: roles.map((r) => r.id) };
     } catch (err) {
       return lookupFailure(err);
     }
