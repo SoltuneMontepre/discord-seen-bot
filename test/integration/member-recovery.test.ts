@@ -383,3 +383,85 @@ describe("MemberStateRebuilder", () => {
     expect(discord.count("getGuildRoleIds")).toBe(1);
   });
 });
+
+describe("restart and idempotency (M9, through createBot)", () => {
+  const PAUSE = "Auto-track temporarily paused";
+  const BOTH = { mentionAutoTrack: true, roleTargets: true };
+
+  it("instance B starts paused; an ack before the rebuild shows the notice; recovery removes it with one edit", async () => {
+    const { makeBot } = await import("../helpers/bot.ts");
+    const { message } = await import("../helpers/auto.ts");
+    const { encodeCustomId } = await import("../../src/discord/custom-id.ts");
+    const { componentInteraction } = await import("../helpers/interactions.ts");
+    const { GatewayDispatchEvents } = await import("@discordjs/core");
+    const { WebSocketShardEvents } = await import("@discordjs/ws");
+
+    const a = await makeBot({ features: BOTH });
+    a.discord.guildRoles.set(G, [G, "dev"]);
+    a.discord.setMember(G, "1", ["dev"]);
+    a.discord.setMember(G, "2", ["dev"]);
+    await a.bot.start();
+    await a.bot.m9.policies.create({
+      guildId: G,
+      channelId: "600",
+      name: "p",
+      roleIds: ["dev"],
+      actor: "9",
+      at: T0,
+    });
+    a.gateway.dispatch(GatewayDispatchEvents.GuildCreate, { id: G });
+    await vi.waitFor(() => expect(a.bot.m9.autoHealth?.state(G)).toBe("healthy"));
+    const m = message();
+    a.discord.addMessage("600", m.id, m.author.id);
+    a.gateway.dispatch(GatewayDispatchEvents.MessageCreate, m);
+    await vi.waitFor(async () => expect(await a.bot.repo.listActiveAuto({})).toHaveLength(1));
+    const [t] = await a.bot.repo.listActiveAuto({});
+    await vi.waitFor(async () =>
+      expect((await a.bot.repo.getTracked(t?.id ?? 0))?.statusMessageId).not.toBeNull(),
+    );
+    const dbPath = a.dbPath;
+    const discord = a.discord;
+    await a.bot.stop();
+
+    const b = await makeBot({ features: BOTH, dbPath, discord });
+    try {
+      await b.bot.start();
+      b.gateway.emit(WebSocketShardEvents.Ready, {}, 0);
+      expect(b.bot.m9.autoHealth?.state(G)).toBe("awaiting_guild");
+      const tracked = await b.bot.repo.getTracked(t?.id ?? 0);
+      await b.bot.router.handle(
+        componentInteraction(encodeCustomId({ action: "ack", trackedId: tracked?.id ?? 0 }), {
+          userId: "1",
+          messageId: tracked?.statusMessageId ?? "0",
+        }),
+      );
+      expect(JSON.stringify(b.responder.last()?.data)).toContain(PAUSE);
+      await vi.advanceTimersByTimeAsync(15_000);
+      const before = discord.count("editCompanion");
+      b.gateway.dispatch(GatewayDispatchEvents.GuildCreate, { id: G });
+      await vi.waitFor(() => expect(b.bot.m9.autoHealth?.state(G)).toBe("healthy"));
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(discord.count("editCompanion") - before).toBe(1);
+      const body = JSON.stringify(discord.companions.get(tracked?.statusMessageId ?? "")?.body);
+      expect(body).not.toContain(PAUSE);
+
+      // replayed MESSAGE_CREATE across the restart → no duplicate
+      b.gateway.dispatch(GatewayDispatchEvents.MessageCreate, m);
+      await vi.advanceTimersByTimeAsync(0);
+      await b.bot.m9.queue.run(G, async () => {});
+      expect(await b.bot.repo.listActiveAuto({})).toHaveLength(1);
+      expect(discord.count("createCompanion")).toBe(1);
+
+      // fresh READY while healthy → awaiting_guild → GUILD_CREATE rebuilds
+      b.gateway.emit(WebSocketShardEvents.Ready, {}, 0);
+      expect(b.bot.m9.autoHealth?.state(G)).toBe("awaiting_guild");
+      const lists = discord.count("listGuildMembers");
+      b.gateway.dispatch(GatewayDispatchEvents.GuildCreate, { id: G });
+      await vi.waitFor(() => expect(b.bot.m9.autoHealth?.state(G)).toBe("healthy"));
+      expect(discord.count("listGuildMembers")).toBe(lists + 1);
+    } finally {
+      await b.close();
+      await a.close();
+    }
+  });
+});
