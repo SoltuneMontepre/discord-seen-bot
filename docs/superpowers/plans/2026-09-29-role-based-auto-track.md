@@ -13,6 +13,8 @@
 > 1. *Task 4:* the three new stop-line strings land in Task 4, not Task 16, because the exhaustive `stopLine()` switch must compile once `StopReason` grows.
 > 2. *Task 5:* `TrackedMessage.origin` / `channelType` are added with the schema in Task 5 (the row mapper needs them), not in Task 6.
 > 3. *Task 5:* Kysely 0.29's `SqliteAdapter.supportsTransactionalDdl` is `false`, so the Migrator does **not** wrap migrations in a transaction (the plan's "migrator's single transaction" premise is wrong). Migration 0002 opens its own `db.transaction()` around every statement including the in-migration `foreign_key_check`, and carries a re-entry guard (schema already migrated ⇒ no-op) for a crash between its commit and Kysely recording the row. FK pragma handling in `migrateToLatest()` is unchanged.
+> 4. *Task 10:* `reconcileInQueue` / `reconcileChannelInQueue` / `reconcileGuildInQueue` take an optional `{ ignorePause }`. Only the rebuilder's recovery reconcile passes it: spec §9.2 step 4 runs `reconcileGuild()` while the state is `reconciling`, which is paused, so without it the recovery reconcile would skip every role-dependent tracking.
+> 5. *Task 10:* `GuildQueue` also rejects cross-guild cycles (1 → 2 → 1) via the ownership chain. Timers and continuations that outlive a task are not "inside" it, so retry timers may enqueue. The app layer stays free of Discord imports (channel types 0/5 as commented literals).
 
 **Goal:** Implement M9, automatic tracking driven by channel role policies and message mentions, without regressing existing manual *Apps → Track Seen* behaviour.
 
