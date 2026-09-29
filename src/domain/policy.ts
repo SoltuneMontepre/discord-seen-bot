@@ -19,6 +19,21 @@ export interface Policy {
   backfillMaxPages: number;
   replyVerifyBatchSize: number;
   replyVerifyConcurrency: number;
+  // ---- M9 auto-tracking
+  /** D8: maximum resolved auto targets (after union, dedupe, author and bot exclusion). */
+  autoTrackMaxTargets: number;
+  /** Delay before paused role-dependent cards are proactively refreshed with the pause notice. */
+  pauseNoticeGraceMs: number;
+  /** Global cap on concurrent status-card edits. */
+  renderEditConcurrency: number;
+  /** Member-state rebuild retry backoff; after the list is exhausted, retry every memberRebuildSteadyMs. */
+  memberRebuildBackoffMs: readonly number[];
+  memberRebuildSteadyMs: number;
+  /** Retry delay for an index-only recovery reconcile after a DB failure. */
+  reconcileRetryMs: number;
+  /** Minimum interval between "over limit" warnings per channel. */
+  overLimitLogIntervalMs: number;
+  backfillConcurrency: number;
 }
 
 const MINUTE = 60_000;
@@ -40,4 +55,12 @@ export const DEFAULT_POLICY: Readonly<Policy> = Object.freeze({
   backfillMaxPages: 10,
   replyVerifyBatchSize: 200,
   replyVerifyConcurrency: 5,
+  autoTrackMaxTargets: 100,
+  pauseNoticeGraceMs: MINUTE,
+  renderEditConcurrency: 2,
+  memberRebuildBackoffMs: [MINUTE, 5 * MINUTE, 15 * MINUTE],
+  memberRebuildSteadyMs: 15 * MINUTE,
+  reconcileRetryMs: MINUTE,
+  overLimitLogIntervalMs: 10 * MINUTE,
+  backfillConcurrency: 2,
 });

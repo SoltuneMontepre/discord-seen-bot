@@ -2,6 +2,10 @@ import { z } from "zod";
 import { DEFAULT_POLICY, type Policy } from "./domain/policy.ts";
 
 const optionalMinutes = z.coerce.number().positive().optional();
+const flag = z
+  .enum(["true", "false"])
+  .default("false")
+  .transform((v) => v === "true");
 
 const EnvSchema = z.object({
   DISCORD_TOKEN: z.string().min(1, "DISCORD_TOKEN is required"),
@@ -14,6 +18,14 @@ const EnvSchema = z.object({
   SEEN_WEAK_WINDOW_MINUTES: optionalMinutes,
   SEEN_TRACKING_TTL_MINUTES: optionalMinutes,
   SEEN_RETENTION_MINUTES: optionalMinutes,
+  MENTION_AUTO_TRACK_ENABLED: flag,
+  ROLE_TARGETS_ENABLED: flag,
+  AUTO_TRACK_MAX_TARGETS: z
+    .string()
+    .regex(/^\d+$/, "must be an integer")
+    .default("100")
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(500)),
   SEEN_DEBUG_PAYLOADS: z
     .enum(["0", "1"])
     .default("0")
@@ -27,6 +39,8 @@ export interface Config {
   logLevel: string;
   production: boolean;
   debugPayloads: boolean;
+  /** M9 feature flags. Both false = exactly M0–M7 behaviour. */
+  features: { mentionAutoTrack: boolean; roleTargets: boolean };
   policy: Policy;
 }
 
@@ -49,8 +63,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     logLevel: e.LOG_LEVEL,
     production,
     debugPayloads: !production && e.SEEN_DEBUG_PAYLOADS,
+    features: {
+      mentionAutoTrack: e.MENTION_AUTO_TRACK_ENABLED,
+      roleTargets: e.ROLE_TARGETS_ENABLED,
+    },
     policy: {
       ...DEFAULT_POLICY,
+      // Configuration, not a dev override: honoured in production too.
+      autoTrackMaxTargets: e.AUTO_TRACK_MAX_TARGETS,
       weakWindowMs: minutes(e.SEEN_WEAK_WINDOW_MINUTES, DEFAULT_POLICY.weakWindowMs),
       trackingTtlMs: minutes(e.SEEN_TRACKING_TTL_MINUTES, DEFAULT_POLICY.trackingTtlMs),
       retentionMs: minutes(e.SEEN_RETENTION_MINUTES, DEFAULT_POLICY.retentionMs),
