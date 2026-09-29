@@ -63,6 +63,10 @@ export const MSG = {
   ended: "Tracking for this message has ended.",
   notManager: "Only the person who started tracking or a moderator can manage it.",
   manageTitle: "Manage tracking — edit who needs to acknowledge, or stop tracking.",
+  manageAutoTitle:
+    "Manage auto tracking — targets follow the message's mentions and the channel's roles. You can stop tracking.",
+  autoTargetsFixed:
+    "Targets of an auto-tracked message follow its mentions and channel roles and can't be edited.",
   targetsUpdated: (n: number) => `Targets updated · ${n} ${n === 1 ? "person" : "people"}.`,
   targetsEmpty: "At least one target is required. Use Stop to end tracking.",
   stopped: "Tracking stopped.",

@@ -128,7 +128,22 @@ async function requireManager(
   return false;
 }
 
-/** Manage (sb1:manage:<id>): ephemeral panel with target editor and Stop. §6.6 */
+const stopRow = (trackedId: number) => ({
+  type: ComponentType.ActionRow,
+  components: [
+    {
+      type: ComponentType.Button,
+      style: ButtonStyle.Danger,
+      custom_id: encodeCustomId({ action: "stop", trackedId }),
+      label: "Stop tracking",
+    },
+  ],
+});
+
+/**
+ * Manage (sb1:manage:<id>): ephemeral panel with target editor and Stop. §6.6
+ * Auto trackings (M9 D5) offer Stop only: their targets follow sources.
+ */
 export async function handleManage(
   deps: InteractionDeps,
   i: Component,
@@ -137,6 +152,10 @@ export async function handleManage(
   const tracked = await loadForCard(deps, i, trackedId);
   if (!tracked) return;
   if (!(await requireManager(i, tracked, (c) => ephemeral(deps, i, c)))) return;
+  if (tracked.origin === "auto") {
+    await ephemeral(deps, i, MSG.manageAutoTitle, [stopRow(trackedId)]);
+    return;
+  }
   const targets = await deps.repo.listTargets(trackedId);
   await ephemeral(deps, i, MSG.manageTitle, [
     {
@@ -155,17 +174,7 @@ export async function handleManage(
         },
       ],
     },
-    {
-      type: ComponentType.ActionRow,
-      components: [
-        {
-          type: ComponentType.Button,
-          style: ButtonStyle.Danger,
-          custom_id: encodeCustomId({ action: "stop", trackedId }),
-          label: "Stop tracking",
-        },
-      ],
-    },
+    stopRow(trackedId),
   ]);
 }
 
@@ -193,6 +202,7 @@ export async function handleTargets(
   const tracked = await loadActiveForPanel(deps, i, trackedId);
   if (!tracked) return;
   if (!(await requireManager(i, tracked, say))) return;
+  if (tracked.origin === "auto") return say(MSG.autoTargetsFixed);
   const userId = invokerId(i) as string;
   if (!("values" in i.data)) return say(MSG.outdated);
 
