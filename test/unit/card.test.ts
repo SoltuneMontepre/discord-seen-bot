@@ -220,3 +220,90 @@ describe("M9 stop lines (spec §12.5)", () => {
     );
   });
 });
+
+describe("M9 card rendering", () => {
+  const PAUSE =
+    "-# ⏸ Auto-track temporarily paused — member state is unavailable. Last known targets are shown.";
+  const auto: TrackedMessage = { ...tracked, origin: "auto", channelType: 0 };
+  const many = (n: number): ProjectionRow[] =>
+    Array.from({ length: n }, (_, i) => ({
+      userId: String(1000 + i),
+      state: "UNKNOWN",
+      basis: null,
+    }));
+
+  it("manual card is byte-identical to the pre-M9 renderer (stored hashes)", () => {
+    const h = (t: TrackedMessage, r: ProjectionRow[]) =>
+      cardRenderer.render({ tracked: t, rows: r }).hash;
+    expect(h(tracked, rows)).toBe(
+      "9dd778af382c26234270cadcd376f532e02b2e40ab254cf52daa513a7d66ca67",
+    );
+    expect(
+      h({ ...tracked, stoppedAt: T0 + HOUR, stopReason: "manual", stoppedByUserId: "100" }, rows),
+    ).toBe("ea0c66eca5a65e72b5917ad725bb203413a2674eb67e76a6167e667e8c6f6f96");
+    expect(h(tracked, many(25))).toBe(
+      "58b9fb3d8512b1a7c9b161923abfa24973e255be81e20180d0a8a58b3785e177",
+    );
+  });
+
+  it("auto cards carry the Auto-tracked label", () => {
+    const [head] = texts(buildCardBody({ tracked: auto, rows }));
+    expect(head).toMatch(/^### 👀 Seen status\n-# Auto-tracked · \[Tracked message\]/);
+    expect(texts(buildCardBody({ tracked, rows }))[0]).not.toMatch(/Auto-tracked/);
+  });
+
+  it("pause notice only when autoTrackPaused, and it changes the hash", () => {
+    const off = cardRenderer.render({ tracked: auto, rows });
+    const on = cardRenderer.render({ tracked: auto, rows, autoTrackPaused: true });
+    expect(texts(off.body)).not.toContain(PAUSE);
+    expect(texts(on.body)).toContain(PAUSE);
+    expect(on.hash).not.toBe(off.hash);
+    expect(countComponents(on.body.components)).toBeLessThanOrEqual(40);
+  });
+
+  it("overflow: 26 targets → 25 user lines + '+1 more', header counts 26", () => {
+    const body = buildCardBody({ tracked: auto, rows: many(26) });
+    const all = texts(body).join("\n");
+    expect(all).toMatch(/0\/26 confirmed/);
+    expect(all.match(/<@\d+>/g)).toHaveLength(25);
+    expect(all).toContain("-# +1 more not shown (counts are complete)");
+  });
+
+  it("overflow spans states in order; 100 targets stay within component limits", () => {
+    const mixed: ProjectionRow[] = [
+      ...many(20).map((r) => ({
+        ...r,
+        state: "CONFIRMED" as const,
+        basis: { kind: "EXPLICIT_ACK" as const, occurredAt: T0 },
+      })),
+      ...many(80).map((r, i) => ({ ...r, userId: String(5000 + i) })),
+    ];
+    const body = buildCardBody({ tracked: auto, rows: mixed });
+    const all = texts(body).join("\n");
+    expect(all.match(/<@\d+>/g)).toHaveLength(25);
+    expect(all).toContain("-# +75 more not shown (counts are complete)");
+    expect(all).toMatch(/20\/100 confirmed/);
+    expect(countComponents(body.components)).toBeLessThanOrEqual(40);
+    expect(all.length).toBeLessThan(4000);
+  });
+
+  it.each([
+    ["no_eligible_targets", "Tracking ended · no eligible targets remain"],
+    ["target_limit_exceeded", "Tracking ended · too many eligible members (limit 100)"],
+    ["feature_disabled", "Tracking ended · role-based auto-track was turned off"],
+  ] as const)("stop line %s, no buttons", (reason, line) => {
+    const body = buildCardBody({
+      tracked: { ...auto, stoppedAt: T0 + HOUR, stopReason: reason, stoppedByUserId: null },
+      rows,
+      maxTargets: 100,
+    });
+    expect(texts(body).some((t) => t.startsWith(`-# ${line} · <t:`))).toBe(true);
+    expect(JSON.stringify(body)).not.toMatch(/"custom_id"/);
+  });
+
+  it("never pings and never renders role mentions", () => {
+    const body = buildCardBody({ tracked: auto, rows: many(30), autoTrackPaused: true });
+    expect(body.allowed_mentions).toEqual({ parse: [] });
+    expect(texts(body).join("\n")).not.toContain("<@&");
+  });
+});

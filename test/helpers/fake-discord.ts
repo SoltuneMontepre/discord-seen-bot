@@ -60,6 +60,9 @@ export class FakeDiscord implements DiscordPort {
   createResults: ({ ok: true } | { ok: false; error: CreateCompanionError })[] = [];
   createGate: Promise<void> | null = null;
   editResults: EditCompanionResult[] = [];
+  editGate: Promise<void> | null = null;
+  maxConcurrentEdits = 0;
+  private activeEdits = 0;
   getMessageOverrides = new Map<string, Failure>();
   getMessageOnce = new Map<string, Failure[]>();
   historyFailures: Failure[] = [];
@@ -160,6 +163,13 @@ export class FakeDiscord implements DiscordPort {
     body: CompanionBody,
   ): Promise<EditCompanionResult> {
     this.calls.push({ method: "editCompanion", args: [channelId, messageId, body] });
+    this.activeEdits += 1;
+    this.maxConcurrentEdits = Math.max(this.maxConcurrentEdits, this.activeEdits);
+    try {
+      if (this.editGate) await this.editGate;
+    } finally {
+      this.activeEdits -= 1;
+    }
     const r = this.editResults.shift() ?? { ok: true };
     if (r.ok) {
       const c = this.companions.get(messageId);

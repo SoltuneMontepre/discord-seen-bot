@@ -152,6 +152,12 @@ export async function createAutoApp(opts: AutoAppOptions) {
     clock: app.clock,
     logger: app.logger,
   });
+  if (autoHealth) {
+    const pause = (t: Parameters<typeof targetReconciler.pauseNoticeApplies>[0]) =>
+      targetReconciler.pauseNoticeApplies(t);
+    app.scheduler.pauseProvider = pause;
+    app.service.pauseProvider = pause;
+  }
   if (roles && index && autoHealth) {
     rebuilder = new MemberStateRebuilder({
       port: app.discord,

@@ -73,6 +73,12 @@ export class TargetReconciler {
     return [...stored, ...policyRoles];
   }
 
+  /** Spec §9.3: auto ∧ active ∧ guild paused ∧ role-dependent. Read-only; usable outside the queue. */
+  async pauseNoticeApplies(t: TrackedMessage): Promise<boolean> {
+    if (t.origin !== "auto" || t.stoppedAt !== null || !this.isPaused(t.guildId)) return false;
+    return isRoleDependent(await this.sourcesFor(t));
+  }
+
   async reconcileInQueue(
     trackedId: number,
     opts: ReconcileOptions = {},

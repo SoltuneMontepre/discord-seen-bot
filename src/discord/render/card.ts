@@ -18,11 +18,15 @@ import { encodeCustomId } from "../custom-id.ts";
 import {
   ACK_BUTTON_EMOJI,
   ACK_BUTTON_LABEL,
+  AUTO_TRACKED_LABEL,
   CARD_FOOTER,
   CARD_TITLE,
   EVIDENCE_LABELS,
   MANAGE_BUTTON_LABEL,
+  MAX_USER_LINES,
   ORPHAN_CARD_TEXT,
+  overflowLine,
+  PAUSE_NOTICE,
   STATE_HEADINGS,
   stopLine,
 } from "./text.ts";
@@ -64,24 +68,32 @@ function header(t: TrackedMessage, rows: ProjectionRow[]): string {
     t.stopReason === "source_deleted"
       ? "Tracked message (deleted)"
       : `[Tracked message](${jumpLink(t.guildId, t.channelId, t.sourceMessageId)})`;
-  return `${CARD_TITLE}\n-# ${link} · ${confirmed}/${rows.length} confirmed`;
+  const label = t.origin === "auto" ? `${AUTO_TRACKED_LABEL} · ` : "";
+  return `${CARD_TITLE}\n-# ${label}${link} · ${confirmed}/${rows.length} confirmed`;
 }
 
 export function buildCardBody(view: CardView): CompanionBody {
   const { tracked: t, rows } = view;
   const children: APIComponentInContainer[] = [text(header(t, rows)), separator()];
 
+  let budget = MAX_USER_LINES;
   for (const state of STATE_ORDER) {
-    const group = rows.filter((r) => r.state === state);
+    const group = rows.filter((r) => r.state === state).slice(0, budget);
     if (group.length === 0) continue;
+    budget -= group.length;
     const lines = group.map((r) => userRow(r, t.createdAt));
     children.push(text([STATE_HEADINGS[state], ...lines].join("\n")));
   }
+  if (rows.length > MAX_USER_LINES) children.push(text(overflowLine(rows.length - MAX_USER_LINES)));
+  if (view.autoTrackPaused) children.push(text(PAUSE_NOTICE));
 
   children.push(separator(), text(CARD_FOOTER));
 
   if (t.stoppedAt !== null && t.stopReason !== null) {
-    children.push(text(stopLine(t.stopReason, t.stoppedByUserId, discordTime(t.stoppedAt, 0))));
+    const opts = view.maxTargets === undefined ? {} : { limit: view.maxTargets };
+    children.push(
+      text(stopLine(t.stopReason, t.stoppedByUserId, discordTime(t.stoppedAt, 0), opts)),
+    );
   } else {
     children.push({
       type: ComponentType.ActionRow,

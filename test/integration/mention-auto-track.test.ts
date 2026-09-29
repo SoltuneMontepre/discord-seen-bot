@@ -202,6 +202,9 @@ describe("mention-triggered auto tracking", () => {
     await post(app, message({ users: ["1"], channelId: "601" }));
     const t = await only(app);
     expect(await targetsOf(app, t.id)).toEqual(["1"]);
+    const body = JSON.stringify(app.discord.companions.get(t.status_message_id ?? "")?.body);
+    expect(body).toContain("Auto-tracked");
+    expect(body).not.toContain("Auto-track temporarily paused");
   });
 
   it("M15b: paused + explicit + mentioned role → none; paused + explicit in a policy channel → none", async () => {

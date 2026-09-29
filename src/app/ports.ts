@@ -20,6 +20,10 @@ export interface Logger {
 export interface CardView {
   tracked: TrackedMessage;
   rows: ProjectionRow[];
+  /** Auto, active, role-dependent and the guild's member state is paused (spec §9.3). */
+  autoTrackPaused?: boolean;
+  /** D8 limit, shown on a target_limit_exceeded stop line. */
+  maxTargets?: number;
 }
 
 /** Opaque message body (Components V2) plus a deterministic hash of it. */

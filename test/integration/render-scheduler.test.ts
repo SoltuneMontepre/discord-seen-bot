@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createApp, type TestApp } from "../helpers/app.ts";
+import { type AutoApp, createApp, createAutoApp, type TestApp } from "../helpers/app.ts";
+import { autoRows, message, policy, post, readyGuild } from "../helpers/auto.ts";
 import { MIN, T0 } from "../helpers/domain.ts";
-import { CHANNEL, msg, startTracked, typing } from "../helpers/scenario.ts";
+import { CHANNEL, GUILD, msg, startTracked, typing } from "../helpers/scenario.ts";
 
 let app: TestApp;
 
@@ -123,5 +124,100 @@ describe("RenderScheduler", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(maxConcurrent).toBe(1);
     expect(app.discord.editCompanion).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("RenderScheduler (M9)", () => {
+  let auto: AutoApp;
+  beforeEach(async () => {
+    auto = await createAutoApp({ features: { mentionAutoTrack: true, roleTargets: true } });
+  });
+  afterEach(async () => auto.dispose());
+
+  const autoEdits = () => auto.discord.count("editCompanion");
+  const PAUSE = "Auto-track temporarily paused";
+  const lastBodyOf = (statusId: string | null) =>
+    JSON.stringify(auto.discord.companions.get(statusId ?? "")?.body ?? {});
+
+  it("at most 2 editCompanion calls in flight with 10 dirty cards", async () => {
+    const ids: number[] = [];
+    for (let i = 0; i < 10; i++) {
+      const { tracked } = await startTracked(auto, { targets: [String(10 + i)] });
+      ids.push(tracked.id);
+    }
+    let open!: () => void;
+    auto.discord.editGate = new Promise<void>((r) => {
+      open = r;
+    });
+    for (const [i, id] of ids.entries()) {
+      await auto.repo.acknowledge(id, String(10 + i), T0 + MIN);
+      auto.scheduler.markDirty(id);
+    }
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(auto.discord.count("editCompanion")).toBe(2);
+    open();
+    auto.discord.editGate = null;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(auto.discord.count("editCompanion")).toBe(10);
+    expect(auto.discord.maxConcurrentEdits).toBe(2);
+  });
+
+  async function scenario() {
+    await policy(auto, ["700"]);
+    await readyGuild(auto, { "1": ["700"] });
+    await post(auto, message()); // role-dependent (policy channel)
+    await post(auto, message({ users: ["2"], channelId: "601" })); // explicit-only
+    const { tracked: manual } = await startTracked(auto, { targets: ["3"] });
+    await vi.advanceTimersByTimeAsync(15_000);
+    const [roleDep, explicit] = await autoRows(auto);
+    if (!roleDep || !explicit) throw new Error();
+    return { roleDep, explicit, manual };
+  }
+
+  it("a pause beyond 60s edits only role-dependent active auto cards", async () => {
+    const { roleDep, explicit, manual } = await scenario();
+    const before = autoEdits();
+    auto.autoHealth?.set(GUILD, "failed");
+    await vi.advanceTimersByTimeAsync(60_000 + 15_000);
+    const edited = auto.discord.calls
+      .filter((c) => c.method === "editCompanion")
+      .slice(before)
+      .map((c) => c.args[1]);
+    expect(edited).toEqual([roleDep.status_message_id]);
+    expect(lastBodyOf(roleDep.status_message_id)).toContain(PAUSE);
+    expect(lastBodyOf(explicit.status_message_id)).not.toContain(PAUSE);
+    expect(edited).not.toContain(manual.statusMessageId);
+  });
+
+  it("a pause resolved within 59s causes zero edits", async () => {
+    await scenario();
+    const before = autoEdits();
+    auto.autoHealth?.set(GUILD, "failed");
+    await vi.advanceTimersByTimeAsync(59_000);
+    auto.autoHealth?.set(GUILD, "healthy");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(autoEdits()).toBe(before);
+  });
+
+  it("any render while paused shows the notice (e.g. an ack re-render)", async () => {
+    const { roleDep } = await scenario();
+    auto.autoHealth?.set(GUILD, "failed");
+    const r = await auto.service.acknowledge(roleDep.id, "1", T0 + 2 * MIN);
+    expect(r.kind).toBe("acknowledged");
+    if (r.kind === "acknowledged") expect(JSON.stringify(r.card.body)).toContain(PAUSE);
+  });
+
+  it("resume + reconcile markDirty coalesce into one edit per changed card", async () => {
+    const { roleDep } = await scenario();
+    auto.autoHealth?.set(GUILD, "failed");
+    await vi.advanceTimersByTimeAsync(75_000); // notice shown
+    const before = autoEdits();
+    auto.discord.setMember(GUILD, "4", ["700"]); // changed while paused
+    auto.rebuilder?.requestRebuild(GUILD, "retry");
+    await auto.settle(GUILD);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(autoEdits() - before).toBe(1);
+    expect(lastBodyOf(roleDep.status_message_id)).not.toContain(PAUSE);
+    expect(lastBodyOf(roleDep.status_message_id)).toContain("<@4>");
   });
 });

@@ -22,6 +22,12 @@ export const ACK_BUTTON_LABEL = "I've seen this";
 export const ACK_BUTTON_EMOJI = "👀";
 export const MANAGE_BUTTON_LABEL = "Manage";
 export const ORPHAN_CARD_TEXT = "-# This tracking is no longer active.";
+export const AUTO_TRACKED_LABEL = "Auto-tracked";
+export const PAUSE_NOTICE =
+  "-# ⏸ Auto-track temporarily paused — member state is unavailable. Last known targets are shown.";
+/** At most this many user lines per card; the header counts stay complete. */
+export const MAX_USER_LINES = 25;
+export const overflowLine = (n: number) => `-# +${n} more not shown (counts are complete)`;
 
 export function stopLine(
   reason: StopReason,

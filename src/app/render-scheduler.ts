@@ -1,7 +1,13 @@
+import pLimit from "p-limit";
 import type { Repository } from "../db/repository.ts";
 import type { Policy } from "../domain/policy.ts";
+import type { TrackedMessage } from "../domain/types.ts";
 import type { CardRenderer, Clock, DiscordPort, Logger } from "./ports.ts";
 import { projectView } from "./view.ts";
+
+/** Whether a card should show the auto-track pause notice (spec §9.3). M0–M7: never. */
+export type PauseProvider = (tracked: TrackedMessage) => Promise<boolean>;
+export const neverPaused: PauseProvider = async () => false;
 
 /** What the tracking service needs from the scheduler. */
 export interface DirtySink {
@@ -28,6 +34,7 @@ const TRANSIENT_MAX_RETRIES = 5;
  * - markDirty: trailing debounce with a max wait.
  * - Only one edit in flight per tracked message; a dirty mark during an edit yields one follow-up.
  * - Skips the PATCH when the rendered hash equals the last successful render.
+ * - At most `policy.renderEditConcurrency` PATCHes in flight globally (spec §9.4).
  */
 export class RenderScheduler implements DirtySink {
   private readonly entries = new Map<number, Entry>();
@@ -37,7 +44,9 @@ export class RenderScheduler implements DirtySink {
   private readonly clock: Clock;
   private readonly policy: Policy;
   private readonly logger: Logger;
+  private readonly editLimit: ReturnType<typeof pLimit>;
   private stopped = false;
+  pauseProvider: PauseProvider = neverPaused;
 
   constructor(deps: {
     repo: Repository;
@@ -53,6 +62,7 @@ export class RenderScheduler implements DirtySink {
     this.clock = deps.clock;
     this.policy = deps.policy;
     this.logger = deps.logger;
+    this.editLimit = pLimit(deps.policy.renderEditConcurrency);
   }
 
   private entry(id: number): Entry {
@@ -145,10 +155,18 @@ export class RenderScheduler implements DirtySink {
     if (t.statusMessageId === null) return;
     if (t.stopReason === "status_deleted" || t.stopReason === "channel_deleted") return;
 
-    const card = this.renderer.render({ tracked: t, rows: projectView(view) });
+    const card = this.renderer.render({
+      tracked: t,
+      rows: projectView(view),
+      autoTrackPaused: await this.pauseProvider(t),
+      maxTargets: this.policy.autoTrackMaxTargets,
+    });
     if (card.hash === t.renderedHash) return;
 
-    const result = await this.port.editCompanion(t.channelId, t.statusMessageId, card.body);
+    const statusMessageId = t.statusMessageId;
+    const result = await this.editLimit(() =>
+      this.port.editCompanion(t.channelId, statusMessageId, card.body),
+    );
     if (result.ok) {
       e.forbiddenStep = 0;
       e.transientStep = 0;

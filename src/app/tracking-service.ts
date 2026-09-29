@@ -19,7 +19,7 @@ import type {
   Logger,
   RenderedCard,
 } from "./ports.ts";
-import type { DirtySink } from "./render-scheduler.ts";
+import { type DirtySink, neverPaused, type PauseProvider } from "./render-scheduler.ts";
 import { projectView } from "./view.ts";
 
 export interface StartInput {
@@ -89,6 +89,7 @@ export class TrackingService {
   private readonly policy: Policy;
   private readonly logger: Logger;
   hooks: SignalFailureHooks = { onMessageSignalFailed() {}, onReactionSignalFailed() {} };
+  pauseProvider: PauseProvider = neverPaused;
 
   constructor(deps: {
     repo: Repository;
@@ -272,7 +273,12 @@ export class TrackingService {
   async renderCard(trackedId: number): Promise<RenderedCard | undefined> {
     const view = await this.repo.loadView(trackedId);
     if (!view) return undefined;
-    return this.renderer.render({ tracked: view.tracked, rows: projectView(view) });
+    return this.renderer.render({
+      tracked: view.tracked,
+      rows: projectView(view),
+      autoTrackPaused: await this.pauseProvider(view.tracked),
+      maxTargets: this.policy.autoTrackMaxTargets,
+    });
   }
 
   // ------------------------------------------------------------------ interactions
