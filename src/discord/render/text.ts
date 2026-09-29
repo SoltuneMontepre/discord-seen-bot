@@ -23,7 +23,12 @@ export const ACK_BUTTON_EMOJI = "👀";
 export const MANAGE_BUTTON_LABEL = "Manage";
 export const ORPHAN_CARD_TEXT = "-# This tracking is no longer active.";
 
-export function stopLine(reason: StopReason, byUserId: string | null, at: string): string {
+export function stopLine(
+  reason: StopReason,
+  byUserId: string | null,
+  at: string,
+  opts: { limit?: number } = {},
+): string {
   switch (reason) {
     case "manual":
       return `-# Tracking ended · stopped${byUserId ? ` by <@${byUserId}>` : ""} · ${at}`;
@@ -34,6 +39,12 @@ export function stopLine(reason: StopReason, byUserId: string | null, at: string
     case "status_deleted":
     case "channel_deleted":
       return `-# Tracking ended · ${at}`;
+    case "no_eligible_targets":
+      return `-# Tracking ended · no eligible targets remain · ${at}`;
+    case "target_limit_exceeded":
+      return `-# Tracking ended · too many eligible members${opts.limit === undefined ? "" : ` (limit ${opts.limit})`} · ${at}`;
+    case "feature_disabled":
+      return `-# Tracking ended · role-based auto-track was turned off · ${at}`;
   }
 }
 

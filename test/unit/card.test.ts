@@ -203,3 +203,18 @@ describe("card rendering", () => {
     expect(texts(late).join("\n")).toMatch(/<@12> · replied · <t:\d+:f>/);
   });
 });
+
+describe("M9 stop lines (spec §12.5)", () => {
+  it("renders the three new stop reasons", async () => {
+    const { stopLine } = await import("../../src/discord/render/text.ts");
+    expect(stopLine("no_eligible_targets", null, "<t:1:f>")).toBe(
+      "-# Tracking ended · no eligible targets remain · <t:1:f>",
+    );
+    expect(stopLine("target_limit_exceeded", null, "<t:1:f>", { limit: 100 })).toBe(
+      "-# Tracking ended · too many eligible members (limit 100) · <t:1:f>",
+    );
+    expect(stopLine("feature_disabled", null, "<t:1:f>")).toBe(
+      "-# Tracking ended · role-based auto-track was turned off · <t:1:f>",
+    );
+  });
+});

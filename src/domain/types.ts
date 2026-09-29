@@ -25,8 +25,15 @@ export const STOP_REASONS = [
   "source_deleted",
   "status_deleted",
   "channel_deleted",
+  // M9 (auto trackings only)
+  "no_eligible_targets",
+  "feature_disabled",
+  "target_limit_exceeded",
 ] as const;
 export type StopReason = (typeof STOP_REASONS)[number];
+
+/** Manual = Apps → Track Seen; auto = M9 mention/policy trigger. Stored explicitly, never inferred. */
+export type TrackingOrigin = "manual" | "auto";
 
 export interface TrackedMessage {
   id: number;
