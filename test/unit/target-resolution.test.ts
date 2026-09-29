@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ExplicitUserResolver } from "../../src/app/explicit-user-resolver.ts";
+import { MemberRoleIndex } from "../../src/app/member-role-index.ts";
+import { RoleSourceResolver } from "../../src/app/role-source-resolver.ts";
 import {
   type ResolvedTarget,
   TargetResolverRegistry,
@@ -75,5 +77,53 @@ describe("TargetResolverRegistry + ExplicitUserResolver", () => {
       }),
     );
     expect(r.desiredTargets([role("700")], ctx)).toEqual(["1"]);
+  });
+});
+
+describe("registry with RoleSourceResolver over MemberRoleIndex", () => {
+  function withRoles(members: { userId: string; roleIds: string[]; bot?: boolean }[]) {
+    const index = new MemberRoleIndex();
+    index.setReferencedRoles("500", ["dev", "qa"]);
+    index.replaceSnapshot(
+      "500",
+      members.map((m) => ({ userId: m.userId, roleIds: m.roleIds, bot: m.bot ?? false })),
+    );
+    return registry(new RoleSourceResolver(index));
+  }
+
+  it("one role → its members", () => {
+    const r = withRoles([
+      { userId: "1", roleIds: ["dev"] },
+      { userId: "2", roleIds: ["qa"] },
+    ]);
+    expect(r.desiredTargets([role("dev")], ctx)).toEqual(["1"]);
+  });
+
+  it("two roles → union; same user through two roles → once", () => {
+    const r = withRoles([
+      { userId: "1", roleIds: ["dev", "qa"] },
+      { userId: "2", roleIds: ["qa"] },
+    ]);
+    expect(r.desiredTargets([role("dev"), role("qa")], ctx).sort()).toEqual(["1", "2"]);
+  });
+
+  it("explicit + role overlap → once", () => {
+    const r = withRoles([{ userId: "1", roleIds: ["dev"] }]);
+    expect(r.desiredTargets([user("1"), role("dev")], ctx)).toEqual(["1"]);
+  });
+
+  it("bot in role → excluded; author holding the role → excluded", () => {
+    const r = withRoles([
+      { userId: "1", roleIds: ["dev"], bot: true },
+      { userId: "100", roleIds: ["dev"] },
+      { userId: "2", roleIds: ["dev"] },
+    ]);
+    expect(r.desiredTargets([role("dev")], ctx)).toEqual(["2"]);
+  });
+
+  it("role resolver requires member state", () => {
+    const r = new RoleSourceResolver(new MemberRoleIndex());
+    expect(r.type).toBe("role");
+    expect(r.requiresMemberState).toBe(true);
   });
 });
