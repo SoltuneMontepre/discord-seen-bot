@@ -103,7 +103,8 @@ of the roles it needs (never persisted), rebuilt from the member list on every `
 a fresh gateway session (not after a resume). Until that rebuild succeeds — and whenever it fails
 (retries after 1, 5, 15 minutes, then every 15) — role-based work is **paused**: no role-based card is
 created or changed, target-increasing policy changes are refused, and role-dependent cards show
-*"⏸ Auto-track temporarily paused"* if the pause lasts over 60 s. Acknowledgements, evidence, Stop and
+*"⏸ Auto-track temporarily paused"* whenever they are rendered (after 60 s of pause they are also
+refreshed proactively, so routine restarts cause no mass edits). Acknowledgements, evidence, Stop and
 expiry keep working, and explicit-only cards are unaffected. This member-state recovery is separate
 from the message watermark below. If the Server Members intent is not enabled in the Portal, Discord
 closes the connection with 4014 and the bot exits with that explanation.
