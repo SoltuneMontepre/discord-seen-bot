@@ -94,9 +94,16 @@ export class MemberStateRebuilder {
       await this.markHealthy(guildId, reason);
       return "healthy";
     }
-    this.deps.health.set(guildId, "rebuilding", { attempt: this.attempts.get(guildId) ?? 0 });
+    // Extending a healthy guild's index (new policy role, newly mentioned role) is not a loss of
+    // member state: the guild stays healthy (no pause notice); already-indexed roles stay valid.
+    const extension = reason === "roles_grew" && !this.deps.health.isPaused(guildId);
+    if (!extension) {
+      this.deps.health.set(guildId, "rebuilding", { attempt: this.attempts.get(guildId) ?? 0 });
+    }
+    const before = this.membershipOf(guildId);
+    let pruned = 0;
     try {
-      await this.pruneDeletedRoles(guildId);
+      pruned = await this.pruneDeletedRoles(guildId);
       const referenced = new Set([
         ...(await this.deps.policies.referencedRoleIds(guildId)),
         ...(await this.deps.repo.activeMessageRoleIds(guildId)),
@@ -108,6 +115,19 @@ export class MemberStateRebuilder {
     } catch (err) {
       this.fail(guildId, err);
       return "failed";
+    }
+    if (extension) {
+      // Member events queued behind this task are diffed against the NEW snapshot, so changes
+      // that happened during the listing (or offline role prunes) must be reconciled here.
+      if (pruned > 0 || this.membershipChanged(guildId, before)) {
+        try {
+          await this.deps.reconciler.reconcileGuildInQueue(guildId);
+        } catch (err) {
+          this.fail(guildId, err);
+          return "failed";
+        }
+      }
+      return "healthy";
     }
     if (opts.reconcile === false) {
       await this.markHealthy(guildId, reason);
@@ -141,8 +161,30 @@ export class MemberStateRebuilder {
 
   // ------------------------------------------------------------------ steps
 
+  /** Current indexed membership per referenced role (user ids), to detect snapshot differences. */
+  private membershipOf(guildId: Snowflake): Map<Snowflake, Set<Snowflake>> {
+    const out = new Map<Snowflake, Set<Snowflake>>();
+    for (const roleId of this.deps.index.referencedRoles(guildId)) {
+      out.set(roleId, new Set(this.deps.index.membersOf(guildId, roleId).map((m) => m.userId)));
+    }
+    return out;
+  }
+
+  private membershipChanged(
+    guildId: Snowflake,
+    before: ReadonlyMap<Snowflake, ReadonlySet<Snowflake>>,
+  ): boolean {
+    const after = this.membershipOf(guildId);
+    for (const [roleId, users] of before) {
+      const now = after.get(roleId);
+      if (!now || now.size !== users.size) return true;
+      for (const u of users) if (!now.has(u)) return true;
+    }
+    return false;
+  }
+
   /** Step 2: prune roles referenced by any policy or active message source but gone from the guild. */
-  private async pruneDeletedRoles(guildId: Snowflake): Promise<void> {
+  private async pruneDeletedRoles(guildId: Snowflake): Promise<number> {
     const roles = await this.deps.port.getGuildRoleIds(guildId);
     if (!roles.ok) throw new RebuildStepError("get guild roles", roles);
     const existing = new Set(roles.value);
@@ -151,12 +193,15 @@ export class MemberStateRebuilder {
       ...(await this.deps.repo.activeMessageRoleIds(guildId)),
     ]);
     const at = this.deps.clock.now();
+    let pruned = 0;
     for (const roleId of referenced) {
       if (existing.has(roleId)) continue;
       await this.deps.roleDeletion.apply(guildId, roleId, at);
       this.deps.index.dropRole(guildId, roleId);
       this.deps.logger.info({ guildId, roleId }, "pruned role deleted while offline");
+      pruned += 1;
     }
+    return pruned;
   }
 
   /** Step 3: page every member; keep only those holding a referenced role (never a directory). */

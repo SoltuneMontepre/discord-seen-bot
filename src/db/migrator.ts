@@ -15,9 +15,10 @@ function migrator(db: Kysely<Database>): Migrator {
 }
 
 /**
- * SQLite applies all pending migrations in ONE transaction, where PRAGMA foreign_keys is a no-op.
- * Table rebuilds (0002) therefore need foreign keys switched off BEFORE the migrator starts; they are
- * always restored afterwards and a final foreign_key_check must be clean.
+ * PRAGMA foreign_keys is a no-op inside a transaction, and migrations that rebuild tables (0002) run
+ * their own transaction (Kysely's SQLite adapter does not wrap migrations; see 0002). Foreign keys are
+ * therefore switched off BEFORE the migrator starts, always restored afterwards, and a final
+ * foreign_key_check must be clean.
  */
 async function withForeignKeysOff<T>(db: Kysely<Database>, run: () => Promise<T>): Promise<T> {
   await sql`PRAGMA foreign_keys = OFF`.execute(db);

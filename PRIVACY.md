@@ -74,8 +74,9 @@ to disk; it is not a member directory and keeps no history.
 - Whoever started tracking, or a moderator, can remove you as a target — this deletes your data
   for that message.
 - To have all of your data deleted, contact the bot operator; they run `pnpm forget-user <your id>`.
-  This also removes you from auto-tracking mention records and replaces your ID on any policy you
-  created or changed.
+  This also removes you from auto-tracking mention records, replaces your ID on any policy you
+  created or changed, and ends automatic tracking of your own messages. If you still hold a role an
+  active card targets, you can be added again as a current target later.
 
 ## Security
 

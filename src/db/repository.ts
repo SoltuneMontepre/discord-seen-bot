@@ -810,10 +810,21 @@ export class Repository {
   /**
    * Deletion request: removes the user's rows everywhere (including their `user` tracking sources)
    * and anonymizes references (tracking and policy actors) to "0".
+   * Active AUTO trackings the user authored are stopped first: once source_author_id is anonymized
+   * the reconciler could no longer exclude the author from their own card (spec §12.6).
    */
-  async forgetUser(userId: Snowflake): Promise<number[]> {
+  async forgetUser(userId: Snowflake, at: UnixMs = Date.now()): Promise<number[]> {
     return this.db.transaction().execute(async (trx) => {
       const affected = new Set<number>();
+      const authored = await trx
+        .updateTable("tracked_messages")
+        .set({ stopped_at: at, stop_reason: "manual", stopped_by_user_id: null })
+        .where("source_author_id", "=", userId)
+        .where("origin", "=", "auto")
+        .where("stopped_at", "is", null)
+        .returning("id")
+        .execute();
+      for (const r of authored) affected.add(r.id);
       for (const table of ["tracking_targets", "evidence", "acknowledgements"] as const) {
         const rows = await trx
           .deleteFrom(table)
@@ -822,6 +833,11 @@ export class Repository {
           .execute();
         for (const r of rows) affected.add(r.tracked_message_id);
       }
+      await trx
+        .updateTable("tracking_targets")
+        .set({ added_by_user_id: "0" })
+        .where("added_by_user_id", "=", userId)
+        .execute();
       for (const col of ["creator_user_id", "source_author_id", "stopped_by_user_id"] as const) {
         const rows = await trx
           .updateTable("tracked_messages")

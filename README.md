@@ -165,7 +165,8 @@ explicitly). `SIGTERM` shuts down gracefully (flushes pending card edits, stops 
 
 - **Deletion requests:** `pnpm forget-user -- <USER_ID>` deletes the user's targets, evidence,
   acknowledgements and auto-track mention sources everywhere, anonymizes references (including policy
-  authors), and re-renders affected active cards.
+  authors), stops active auto cards on the user's own messages (the author could otherwise no longer
+  be excluded as a target), and re-renders affected cards.
 - **Retention:** tracking expires after 7 days; all rows for a tracked message are deleted 30 days
   after tracking stops; removing the bot from a server purges that server immediately.
 

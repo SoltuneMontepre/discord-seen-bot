@@ -302,3 +302,35 @@ describe("forgetUser (M9 extension)", () => {
     expect(s.rows[0]?.added_by_user_id).toBe("0");
   });
 });
+
+describe("forgetUser — author exclusion (review finding)", () => {
+  it("stops active auto trackings the forgotten user authored, so reconcile can never target them", async () => {
+    const own = await auto(["2"], [], { sourceAuthorId: "100", creatorUserId: "100" });
+    const others = await auto(["100", "3"], [{ type: "user", userId: "100" }], {
+      sourceAuthorId: "7",
+      creatorUserId: "7",
+    });
+    const manual = await repo.insertTracking(newTracking({ sourceAuthorId: "100" }), ["2"]);
+    if (!manual.ok) throw new Error();
+    await repo.forgetUser("100", T0 + MIN);
+    const after = await repo.getTracked(own.id);
+    expect(after).toMatchObject({
+      stopReason: "manual",
+      stoppedByUserId: null,
+      stoppedAt: T0 + MIN,
+    });
+    expect(await repo.reconcileAutoTargets(own.id, ["0", "2"], T0 + 2 * MIN)).toEqual({
+      status: "inactive",
+    });
+    expect((await repo.getTracked(others.id))?.stoppedAt).toBeNull(); // only authored ones stop
+    expect((await repo.getTracked(manual.tracked.id))?.stoppedAt).toBeNull(); // manual unchanged
+  });
+
+  it("anonymizes tracking_targets.added_by_user_id", async () => {
+    await auto(["2"], [], { sourceAuthorId: "100", creatorUserId: "100" });
+    await repo.forgetUser("100", T0 + MIN);
+    const rows = await sql<{ n: number }>`
+      SELECT count(*) AS n FROM tracking_targets WHERE added_by_user_id = '100'`.execute(ctx.db);
+    expect(Number(rows.rows[0]?.n)).toBe(0);
+  });
+});

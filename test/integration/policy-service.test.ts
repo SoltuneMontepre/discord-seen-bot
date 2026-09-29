@@ -289,3 +289,62 @@ describe("PolicyService", () => {
     expect(app.index?.memberCount(GUILD)).toBe(1);
   });
 });
+
+describe("index extension (roles_grew) races — review findings", () => {
+  it("a member change that happens while the extension lists members is reconciled", async () => {
+    await readyGuild(app, { "200": ["700"] });
+    await created("700");
+    await post(app, message());
+    const [t] = await autoRows(app);
+    // while the extension for role 701 pages members, 201 gains @700 and 200 loses it
+    let open!: () => void;
+    app.discord.memberGate = new Promise<void>((r) => {
+      open = r;
+    });
+    const saving = created("701", "601", "Other");
+    await vi.advanceTimersByTimeAsync(0);
+    app.discord.setMember(GUILD, "201", ["700"]);
+    app.discord.setMember(GUILD, "200", []);
+    const e1 = app.coordinator.onMemberEvent({
+      t: "member_upsert",
+      guildId: GUILD,
+      userId: "201",
+      roleIds: ["700"],
+      bot: false,
+    });
+    const e2 = app.coordinator.onMemberEvent({
+      t: "member_upsert",
+      guildId: GUILD,
+      userId: "200",
+      roleIds: [],
+      bot: false,
+    });
+    open();
+    app.discord.memberGate = null;
+    await Promise.all([saving, e1, e2]);
+    expect(await targetsOf(app, t?.id ?? 0)).toEqual(["201"]);
+  });
+
+  it("an extension never pauses a healthy guild (no pause notice on renders meanwhile)", async () => {
+    await readyGuild(app, { "1": ["700"] });
+    await created("700");
+    await post(app, message());
+    const [t] = await autoRows(app);
+    const states: string[] = [];
+    let open!: () => void;
+    app.discord.memberGate = new Promise<void>((r) => {
+      open = r;
+    });
+    const saving = created("701", "601", "Other");
+    await vi.advanceTimersByTimeAsync(0);
+    states.push(app.autoHealth?.state(GUILD) ?? "");
+    const card = await app.service.renderCard(t?.id ?? 0);
+    expect(JSON.stringify(card?.body)).not.toContain("Auto-track temporarily paused");
+    await vi.advanceTimersByTimeAsync(120_000); // grace would have fired
+    open();
+    app.discord.memberGate = null;
+    await saving;
+    expect(states).toEqual(["healthy"]);
+    expect(app.autoHealth?.state(GUILD)).toBe("healthy");
+  });
+});
