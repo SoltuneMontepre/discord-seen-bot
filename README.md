@@ -160,6 +160,22 @@ docker run -d --restart unless-stopped --env-file .env \
   -e DATABASE_PATH=/data/seen.db -v /srv/seen-bot/data:/data discord-seen-bot
 ```
 
+### Prebuilt image (GHCR)
+
+Every push to `main` (and every `v*` tag) publishes a multi-arch image (amd64 + arm64) to
+`ghcr.io/soltunemontepre/discord-seen-bot` via `.github/workflows/docker-publish.yml`. On the server,
+copy `docker-compose.yml` and a `.env` next to each other, then:
+
+```bash
+mkdir -p /srv/seen-bot/data && chown 1000:1000 /srv/seen-bot/data   # encrypted storage!
+docker login ghcr.io          # only needed while the package is private
+docker compose pull && docker compose up -d
+docker compose logs -f seen-bot
+```
+
+Register slash commands once (and after command changes):
+`docker compose exec seen-bot node scripts/register-commands.ts`.
+
 Single instance only (SQLite, single writer). Migrations run on startup (`pnpm db:migrate` to run them
 explicitly). `SIGTERM` shuts down gracefully (flushes pending card edits, stops accepting interactions).
 

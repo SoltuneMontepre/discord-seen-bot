@@ -1,0 +1,14 @@
+# Server-side deployment: pulls the prebuilt image from GHCR (see .github/workflows/docker-publish.yml).
+#   docker compose pull && docker compose up -d
+services:
+  seen-bot:
+    image: ghcr.io/soltunemontepre/discord-seen-bot:latest
+    container_name: seen-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_PATH: /data/seen.db
+    volumes:
+      # MUST be on host storage encrypted at rest (see README). chown 1000:1000 this directory.
+      - /srv/seen-bot/data:/data
+    stop_grace_period: 30s
